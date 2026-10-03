@@ -1,0 +1,250 @@
+@import "tailwindcss";
+/* Inter is bundled locally from node_modules (@fontsource/inter) — latin
+   subset, weights 400–700. No Google Fonts: the app makes zero external
+   font requests, keeping the zero-knowledge promise intact. */
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+/* The .dark class lives on <html>, so a bare :not(.dark) * would match every
+   element in both themes (body itself is never .dark). Pin to html. */
+@custom-variant light (&:where(html:not(.dark) *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "SF Pro Text",
+    "Segoe UI", Roboto, sans-serif;
+}
+
+/* Expose the CSS variables as Tailwind color utilities (bg-page, card
+   backgrounds, border-line, text-heading, text-secondary, ...) that
+   automatically follow the active theme. `inline` keeps var() references
+   so opacity modifiers keep working via color-mix. */
+@theme inline {
+  --color-page: var(--bg-page);
+  --color-surface: var(--bg-surface);
+  --color-raised: var(--bg-raised);
+  --color-sunken: var(--bg-sunken);
+  --color-line: var(--border-line);
+  --color-line-strong: var(--border-strong);
+  --color-heading: var(--text-heading);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-lead: var(--text-lead);
+}
+
+/* ============================================================
+   SHARD design tokens — Light (Apple minimalist) / Dark (zinc).
+   Surfaces, borders, text and the page background live in CSS
+   variables so every component can use `bg-surface`, `border-line`,
+   `text-heading`, `text-secondary` and follow the active theme.
+   ============================================================ */
+:root {
+  --bg-page: #fafafa; /* soft light gray canvas */
+  --bg-surface: #ffffff; /* cards, modals, inputs */
+  --bg-raised: #ffffff; /* elevated: menus, popovers */
+  --bg-sunken: #f4f4f5; /* pressed wells, QR tile, tracks */
+  --border-line: rgb(0 0 0 / 0.1); /* hairline zinc-200 */
+  --border-strong: rgb(0 0 0 / 0.18);
+  --text-heading: #09090b; /* deep coal titles */
+  --text-secondary: #71717a; /* neutral dark gray body */
+  --text-tertiary: #a1a1aa;
+  --text-lead: #3f3f46; /* accent span in the hero */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 12px rgb(0 0 0 / 0.05);
+  --shadow-pop: 0 8px 30px rgb(0 0 0 / 0.12);
+}
+
+.dark {
+  --bg-page: #09090b; /* deep calm black */
+  --bg-surface: #18181b; /* matte zinc-900 graphite */
+  --bg-raised: #1c1c20;
+  --bg-sunken: #09090b;
+  --border-line: rgb(255 255 255 / 0.1); /* border-white/[0.08..0.1] */
+  --border-strong: rgb(255 255 255 / 0.16);
+  --text-heading: #ffffff;
+  --text-secondary: #a1a1aa; /* zinc-400 */
+  --text-tertiary: #71717a;
+  --text-lead: #d4d4d8;
+  --shadow-card: 0 0 0 0 transparent;
+  --shadow-pop: 0 8px 30px rgb(0 0 0 / 0.5);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bg-page);
+  @apply font-sans text-secondary antialiased transition-colors duration-200;
+  /* The page scrolls, the body never bounces: chat lists do their own
+     scrolling, and a rubber-banding body breaks fixed overlays on iOS. */
+  overscroll-behavior-y: none;
+}
+
+::selection {
+  background: rgb(0 0 0 / 0.12);
+}
+.dark ::selection {
+  background: rgb(255 255 255 / 0.16);
+}
+
+/* ============================================================
+   Mobile adaptation — phones, notches and on-screen keyboards.
+   ============================================================ */
+
+/* Dynamic viewport height: 100dvh tracks the *visual* viewport, so
+   full-height layouts end above the on-screen keyboard (where 100vh
+   keeps the keyboard-less height and the keyboard covers the bottom
+   of the UI). The old-browser fallback stays first. */
+.h-screen-safe {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Safe-area paddings for devices with notches / home indicators.
+   On non-notched devices every env() resolves to 0px — a no-op. */
+.safe-px {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+.safe-pt {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* 16px inputs on coarse pointers: iOS Safari zooms any focusable element
+   with a font smaller than 16px — an instant unwanted page zoom while
+   typing. The extra height stays within the pill on phones. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Tap targets: remove the gray touch highlight, keep taps snappy. */
+button,
+a,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The on-screen keyboard hides hover-dependent UI forever on touch —
+   everything interactive is reachable with a plain tap (see components).
+   .touch-visible: group-hover reveals (reply/react buttons, the video
+   fullscreen icon) stay shown on touch devices. */
+@media (hover: none) {
+  .touch-visible {
+    opacity: 1 !important;
+  }
+}
+
+/* Slim neutral scrollbar, matches the active theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ============================================================
+   Utility tokens — one class each, theme-aware by construction.
+   ============================================================ */
+
+/* Page canvas + optional fading dot grid on top of it. */
+.page-bg {
+  background-color: var(--bg-page);
+}
+.page-grid {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.dark .page-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+}
+
+/* Matte card: surface fill + hairline border (+ soft premium shadow in light). */
+.card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-line);
+  box-shadow: var(--shadow-card);
+}
+.card-hover:hover {
+  border-color: var(--border-strong);
+}
+
+/* Sunken well (QR tile, tracks, disabled previews). */
+.well {
+  background-color: var(--bg-sunken);
+  border: 1px solid var(--border-line);
+}
+
+/* Hairline page dividers. */
+.line-b {
+  border-bottom: 1px solid var(--border-line);
+}
+.line-t {
+  border-top: 1px solid var(--border-line);
+}
+
+.border-line {
+  border-color: var(--border-line);
+}
+
+/* Popover/dropdown shadow (soft in light, deep in dark). */
+.shadow-pop {
+  box-shadow: var(--shadow-pop);
+}
+
+/* ============================================================
+   Landing logo intro: the crystal assembles once on page load —
+   spins + scales in while its facet cuts draw themselves — then
+   rests in its static final state (fill-mode both, no loop).
+   ============================================================ */
+@keyframes logo-crystal-in {
+  from {
+    opacity: 0;
+    transform: rotate(-180deg) scale(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+@keyframes logo-facet-draw {
+  from {
+    stroke-dashoffset: 40;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.logo-intro {
+  opacity: 0;
+  animation: logo-crystal-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
+
+.logo-intro polyline,
+.logo-intro line {
+  stroke-dasharray: 40;
+  animation: logo-facet-draw 0.7s ease-out 0.5s both;
+}
+
+/* Respect users who prefer reduced motion: skip straight to static. */
+@media (prefers-reduced-motion: reduce) {
+  .logo-intro {
+    animation: none;
+    opacity: 1;
+  }
+  .logo-intro polyline,
+  .logo-intro line {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}

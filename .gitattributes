@@ -1,0 +1,15 @@
+# Normalize line endings: store LF in the repository, check out LF everywhere.
+# Windows has core.autocrlf=true by default, which would otherwise rewrite every
+# source file on checkout and produce whole-file diffs for Linux/macOS
+# contributors. Everything here is LF-native (Go, TS, Dockerfile, YAML).
+* text=auto eol=lf
+
+# Binary assets must never be touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.webp binary

@@ -1,0 +1,24 @@
+# SHARD — one container serves the SPA and the blind relay on :8080.
+services:
+  shard:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      SHARD_ADDR: ":8080"
+      SHARD_STATIC: "/app/frontend/dist"
+      # Strict allow-list of browser origins (CSWSH / CORS, comma-separated).
+      # Unset → dev mode: loopback origins only, with a startup warning.
+      ALLOWED_ORIGINS: "http://localhost:5173"
+      # Optional Metered TURN broker; unset → STUN-only ICE fallback
+      # (no third-party TURN, no Google STUN). Override the STUN endpoint
+      # with SHARD_STUN_URL (default: stun:stun.cloudflare.com:3478).
+      # METERED_DOMAIN: "your.subdomain.metered.ca"
+      # METERED_API_KEY: "your-api-key"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

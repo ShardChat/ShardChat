@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover: draws under notches; safe-area env() paddings
+         keep UI clear of them. interactive-widget=resizes-content (Chrome
+         108+/Android): the layout viewport SHRINKS when the on-screen
+         keyboard opens, so the input dock rides above the keyboard instead
+         of hiding behind it. iOS Safari always resizes the window. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+
+    <!-- Primary Meta Tags -->
+    <title>SHARD — Ephemeral Encrypted Sessions</title>
+    <meta name="title" content="SHARD — Ephemeral Encrypted Sessions" />
+    <meta
+      name="description"
+      content="Disposable, zero-knowledge encrypted communication relay. No databases, zero logs, sessions vanish without a trace."
+    />
+    <meta name="theme-color" content="#09090b" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://shardchat.xyz/" />
+    <meta property="og:title" content="SHARD — Ephemeral Encrypted Sessions" />
+    <meta
+      property="og:description"
+      content="Disposable, zero-knowledge encrypted communication relay. No databases, zero logs, sessions vanish without a trace."
+    />
+    <meta property="og:image" content="https://shardchat.xyz/logo.png" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:url" content="https://shardchat.xyz/" />
+    <meta name="twitter:title" content="SHARD — Ephemeral Encrypted Sessions" />
+    <meta
+      name="twitter:description"
+      content="Disposable, zero-knowledge encrypted communication relay. No databases, zero logs, sessions vanish without a trace."
+    />
+    <meta name="twitter:image" content="https://shardchat.xyz/logo.png" />
+
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="index, follow" />
+    <!-- SHARD crystal favicon; colors follow the browser tab theme. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Fonts are bundled locally via @fontsource/inter (src/index.css):
+         zero external requests — no Google Fonts, no gstatic, no trackers. -->
+    <script>
+      // Theme bootstrap: runs before first paint. Stored choice
+      // (localStorage['shard-theme']) wins, otherwise follow the OS.
+      (function () {
+        try {
+          var t = localStorage.getItem("shard-theme");
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.classList.toggle("dark", t === "dark");
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+# SHARD — public pages are indexed; private rooms are not.
+# Rooms are disposable E2EE sessions: their URLs must never appear in search.
+
+User-agent: *
+Allow: /
+Disallow: /room/
+
+# No crawl-delay: the relay keeps no logs to protect anyway.

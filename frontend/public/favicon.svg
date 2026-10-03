@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    /* Crystal follows the browser tab theme: coal on light, white on dark. */
+    polygon { fill: #09090b; }
+    polyline, line { stroke: #fafafa; }
+    @media (prefers-color-scheme: dark) {
+      polygon { fill: #fafafa; }
+      polyline, line { stroke: #09090b; }
+    }
+  </style>
+  <polygon points="12,1.5 19.5,6 17.5,18.5 12,22.5 6.5,18.5 4.5,6"/>
+  <polyline points="4.5,6 12,9.5 19.5,6" stroke-width="1.2" fill="none"/>
+  <line x1="12" y1="9.5" x2="12" y2="22.5" stroke-width="1.2"/>
+</svg>

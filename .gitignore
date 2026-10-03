@@ -1,0 +1,41 @@
+# Go
+backend/bin/
+*.exe
+*.test
+*.out
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/*.local
+frontend/.vite/
+node_modules/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs (local dev / container output)
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Local test suites — not published
+*_test.go
+backend/scripts/
+
+# Internal notes — not published
+plan.md
+SECURITY_AUDIT.md
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local tooling metadata
+.freebuff/
