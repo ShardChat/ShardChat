@@ -126,18 +126,16 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 | Calls            | Native `RTCPeerConnection`, signaling relayed in-session            |
 |                  | (no third-party broker); TURN credentials brokered by Go           |
 | Extras           | JSZip (archive inspection), react-markdown, qrcode.react            |
-| Tests            | Go table tests (`go test ./...`), in-browser crypto self-test      |
+| Tests            | In-browser crypto self-test (`frontend/src/crypto/selftest.ts`)      |
 
 ```text
 .
 ├── backend/
 │   ├── cmd/server/main.go        # relay entrypoint: REST, WS, TURN, static hosting, signal handling
-│   ├── cmd/server/main_test.go   # rate-limit key derivation (X-Forwarded-For trust chain)
 │   ├── internal/httpx/           # security headers, CORS origin checks, panic recovery
 │   ├── internal/room/            # room manager: RAM store, TTL timers, burn path, connection budget
 │   ├── internal/turn/            # Metered TURN broker + local-dev fallback
 │   ├── internal/ws/              # WebSocket handler, packet protocol, 2-peer gate
-│   └── scripts/smoketest.mjs     # relay smoke test
 ├── frontend/
 │   ├── .env.example              # documented VITE_* build-time overrides
 │   ├── public/                   # favicon, logo, robots.txt
@@ -150,7 +148,6 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 │       ├── lib/                  # fileSecurity, media, audioBus, theme, endpoints
 │       ├── pages/                # Landing, SessionSetup (/new), Donate (/donate), Security, Terms
 │       └── types/                # WS packet contract (protocol.ts)
-├── scripts/make-logo.mjs         # logo.png generator (dependency-free)
 ├── LICENSE                        # AGPL-3.0
 ├── Dockerfile                     # single-image build, runs as UID 10001
 ├── docker-compose.yml
@@ -204,17 +201,17 @@ Production build served by the relay (single process, single origin):
 ```bash
 cd frontend && npm run build   # emits frontend/dist
 cd ../backend
-go test ./...
 go run ./cmd/server            # serves dist + API on :8080
 ```
 
-Tests:
+Static checks:
 
 ```bash
 cd backend
 go vet ./...
-go test ./...            # relay, origin policy, room lifecycle, connection budget
-go test ./... -race      # requires CGO — run it on Linux in CI
+gofmt -l .        # expect no output
+cd ../frontend
+npx tsc -b
 ```
 
 Docker (multi-stage build: frontend bundle compiled, Go binary built, one minimal runtime image serving both, running as UID 10001):
