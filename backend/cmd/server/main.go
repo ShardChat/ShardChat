@@ -221,7 +221,7 @@ func main() {
 	})
 
 	// Health: anonymous operational status only.
-	mux.HandleFunc("HEAD /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":    "ok",
 			"liveRooms": manager.LiveRooms(),
