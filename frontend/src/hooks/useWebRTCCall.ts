@@ -37,6 +37,9 @@ export interface UseWebRTCCallResult {
   muted: boolean;
   cameraOff: boolean;
   sharing: boolean;
+  /** No mobile browser exposes getDisplayMedia. When true the share control
+   *  explains itself instead of failing silently. */
+  shareUnsupported: boolean;
   canFlip: boolean;
   remotePeerReady: boolean;
   /** THIS client is sharing its screen (vs. viewing the peer's share).
@@ -326,6 +329,9 @@ export function useWebRTCCall({
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [sharing, setSharing] = useState(false);
+  /** True once the browser turned out to have no screen-capture API at all
+   *  (every phone). Drives the one-line explanation on the share control. */
+  const [shareUnsupported, setShareUnsupported] = useState(false);
   const [canFlip, setCanFlip] = useState(false);
   const [remotePeerReady, setRemotePeerReady] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -861,6 +867,14 @@ export function useWebRTCCall({
       return;
     }
     try {
+      // No mobile browser implements getDisplayMedia - not Chrome for Android,
+      // not Safari for iOS. Without this guard the button looked perfectly
+      // normal and simply did nothing, which reads as a broken app rather
+      // than an absent platform capability.
+      if (typeof navigator.mediaDevices?.getDisplayMedia !== "function") {
+        setShareUnsupported(true);
+        return;
+      }
       // FullHD ideal (4K headroom) at 30 fps. Chrome picker hints against
       // the infinity mirror: preselect the TAB surface (a tab capture can
       // never contain the viewer's own window - no recursive tunnel on
@@ -1310,6 +1324,7 @@ export function useWebRTCCall({
     muted,
     cameraOff,
     sharing,
+    shareUnsupported,
     canFlip,
     remotePeerReady,
     isLocalScreenSharing: sharing,

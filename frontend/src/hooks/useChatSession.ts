@@ -180,6 +180,10 @@ export function useChatSession(roomId: string): UseChatSessionResult {
   // the measurement with an already-emptied state.
   const [purgeStats, setPurgeStats] = useState<PurgeStats | null>(null);
   const purgedRef = useRef(false);
+  /** Latched the moment the session reaches an end state. Guards the
+   *  reconnect path: a burned/gone/full room must never be resurrected by a
+   *  late "connecting" phase, which blinked the destroyed screen away. */
+  const terminalRef = useRef(false);
   useLayoutEffect(() => {
     if (purgedRef.current) return;
     if (phase !== "burned" && phase !== "gone" && phase !== "room_full") return;
@@ -205,6 +209,7 @@ export function useChatSession(roomId: string): UseChatSessionResult {
    *  funnel here, and later signals never overwrite the attribution. */
   const endSession = useCallback((reason: BurnReason | null) => {
     if (burnReasonRef.current === null) burnReasonRef.current = reason;
+    terminalRef.current = true;
     setPhase("burned");
   }, []);
 
@@ -260,6 +265,13 @@ export function useChatSession(roomId: string): UseChatSessionResult {
     peerPubRef.current = null;
     keyPairRef.current = null;
     peerLeftRef.current = false;
+    if (terminalRef.current) {
+      // The session already ended. A reconnect after the burn must NOT restart
+      // it: setPhase("connecting") here used to drop Room out of its burned
+      // gate for a frame, so the destroyed screen visibly blinked out and
+      // back once per reconnect attempt before the 404 probe relatched it.
+      return;
+    }
     setPhase("connecting");
     generateECDHKeyPair().then(async (pair) => {
       if (epoch !== sessionEpochRef.current) return; // superseded handshake
@@ -558,6 +570,7 @@ export function useChatSession(roomId: string): UseChatSessionResult {
         burnReasonRef.current = expiresAt == null ? null : Date.now() >= expiresAt ? "timer" : "restart";
       }
       setPhase("gone");
+      terminalRef.current = true;
     }
   }, [goneLatch, phase, expiresAt]);
 
@@ -566,6 +579,7 @@ export function useChatSession(roomId: string): UseChatSessionResult {
   // like the burn screen so a later render can never fall back to the chat.
   useEffect(() => {
     if (!roomFull) return;
+    terminalRef.current = true;
     setPhase("room_full");
   }, [roomFull]);
 

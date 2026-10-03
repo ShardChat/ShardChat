@@ -267,7 +267,13 @@ export function CallStage(props: UseWebRTCCallResult) {
         {camOff ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
       </RoundBtn>
       <RoundBtn
-        label={props.sharing ? "Stop screen sharing" : "Share screen"}
+        label={
+          props.sharing
+            ? "Stop screen sharing"
+            : props.shareUnsupported
+              ? "Screen sharing is not available on mobile browsers"
+              : "Share screen"
+        }
         onClick={() => void props.toggleShare()}
         tone={props.sharing ? "on" : "idle"}
       >
