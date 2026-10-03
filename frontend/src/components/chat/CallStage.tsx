@@ -266,19 +266,18 @@ export function CallStage(props: UseWebRTCCallResult) {
       >
         {camOff ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
       </RoundBtn>
-      <RoundBtn
-        label={
-          props.sharing
-            ? "Stop screen sharing"
-            : props.shareUnsupported
-              ? "Screen sharing is not available on mobile browsers"
-              : "Share screen"
-        }
-        onClick={() => void props.toggleShare()}
-        tone={props.sharing ? "on" : "idle"}
-      >
-        <MonitorUp className="h-5 w-5" />
-      </RoundBtn>
+      {/* Screen sharing has no API on any phone (no getDisplayMedia in Chrome for
+          Android or Safari for iOS), so the control is simply not rendered
+          there instead of sitting there doing nothing. */}
+      {props.canShare && (
+        <RoundBtn
+          label={props.sharing ? "Stop screen sharing" : "Share screen"}
+          onClick={() => void props.toggleShare()}
+          tone={props.sharing ? "on" : "idle"}
+        >
+          <MonitorUp className="h-5 w-5" />
+        </RoundBtn>
+      )}
       <RoundBtn
         label="Flip camera"
         onClick={() => void props.flipCamera()}
