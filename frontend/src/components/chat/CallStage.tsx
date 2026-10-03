@@ -285,32 +285,37 @@ export function CallStage(props: UseWebRTCCallResult) {
       >
         <SwitchCamera className="h-5 w-5" />
       </RoundBtn>
-      <div className="relative" ref={settingsRef}>
-        <RoundBtn label="Devices" onClick={() => setSettingsOpen((v) => !v)} tone={settingsOpen ? "on" : "idle"}>
-          <Settings className="h-5 w-5" />
-        </RoundBtn>
-        {settingsOpen && (
-          <div className="card absolute bottom-[calc(100%+12px)] left-1/2 z-[60] w-72 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-2xl p-3 shadow-pop">
-            <p className="mb-2 text-xs font-medium text-heading">Devices</p>
-            <div className="flex flex-col gap-2.5">
-              <DeviceSelect label="Microphone" value={props.micId} options={props.audioInputs} onChange={props.setMic} />
-              <DeviceSelect
-                label="Camera"
-                value={props.cameraId}
-                options={props.videoInputs}
-                disabled={props.sharing}
-                onChange={props.setCameraDevice}
-              />
-              <DeviceSelect
-                label="Speaker"
-                value={props.speakerId}
-                options={props.audioOutputs}
-                onChange={props.setSpeaker}
-              />
+      {/* Device picker only where there is a choice to make: a phone reports one
+          microphone and one camera, so the panel would be three dropdowns with
+          a single dead option each. */}
+      {props.canPickDevices && (
+        <div className="relative" ref={settingsRef}>
+          <RoundBtn label="Devices" onClick={() => setSettingsOpen((v) => !v)} tone={settingsOpen ? "on" : "idle"}>
+            <Settings className="h-5 w-5" />
+          </RoundBtn>
+          {settingsOpen && (
+            <div className="card absolute bottom-[calc(100%+12px)] left-1/2 z-[60] w-72 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-2xl p-3 shadow-pop">
+              <p className="mb-2 text-xs font-medium text-heading">Devices</p>
+              <div className="flex flex-col gap-2.5">
+                <DeviceSelect label="Microphone" value={props.micId} options={props.audioInputs} onChange={props.setMic} />
+                <DeviceSelect
+                  label="Camera"
+                  value={props.cameraId}
+                  options={props.videoInputs}
+                  disabled={props.sharing}
+                  onChange={props.setCameraDevice}
+                />
+                <DeviceSelect
+                  label="Speaker"
+                  value={props.speakerId}
+                  options={props.audioOutputs}
+                  onChange={props.setSpeaker}
+                />
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
       <RoundBtn label="End call" onClick={props.hangup} tone="end">
         <PhoneOff className="h-5 w-5" />
       </RoundBtn>

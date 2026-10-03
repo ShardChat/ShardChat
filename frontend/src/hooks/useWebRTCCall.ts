@@ -40,6 +40,10 @@ export interface UseWebRTCCallResult {
   /** False where the browser has no screen-capture API at all - which is
    *  every phone. The share control is not rendered there. */
   canShare: boolean;
+  /** False when the device offers nothing to choose between. A phone has one
+   *  microphone and one camera, so the picker is three dead dropdowns there
+   *  and the control is not rendered. */
+  canPickDevices: boolean;
   canFlip: boolean;
   remotePeerReady: boolean;
   /** THIS client is sharing its screen (vs. viewing the peer's share).
@@ -345,6 +349,10 @@ export function useWebRTCCall({
   const [audioInputs, setAudioInputs] = useState<MediaDeviceOption[]>([]);
   const [videoInputs, setVideoInputs] = useState<MediaDeviceOption[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceOption[]>([]);
+  // Nothing to switch between => nothing to offer. Counted from the live
+  // device lists rather than from the UA, so a desktop with a single webcam
+  // is spared the panel too while one with a headset keeps it.
+  const canPickDevices = audioInputs.length > 1 || videoInputs.length > 1 || audioOutputs.length > 1;
   const [micId, setMicId] = useState("");
   const [cameraId, setCameraId] = useState("");
   const [speakerId, setSpeakerId] = useState("");
@@ -1334,6 +1342,7 @@ export function useWebRTCCall({
     audioInputs,
     videoInputs,
     audioOutputs,
+    canPickDevices,
     micId,
     cameraId,
     speakerId,
