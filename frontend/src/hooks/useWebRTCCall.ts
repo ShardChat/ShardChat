@@ -292,17 +292,22 @@ async function countVideoInputs(): Promise<number> {
   }
 }
 
-/** True when the local camera can actually be turned around.
+/** True when the local camera can plausibly be turned around.
  *
  *  A laptop reports two `videoinput` devices, so counting them is enough.
  *  A phone reports ONE device and exposes front/back as the `facingMode`
- *  capability of that single lens — counting alone always returns 1 there,
- *  which disabled the flip button on every mobile browser. Ask the track
- *  what it can do before deciding. */
-async function canFlipCamera(track: MediaStreamTrack | null | undefined): Promise<boolean> {
-  if (await countVideoInputs() > 1) return true;
+ *  capability of that single lens — counting alone always returns 1 there.
+ *
+ *  The capability probe cannot be trusted to rule it out either: several
+ *  mobile engines omit `facingMode` from getCapabilities() entirely, so a
+ *  purely capability-based check disables the button on exactly the handsets
+ *  that need it. A touch-capable device is therefore treated as flippable and
+ *  the attempt itself decides — flipCamera verifies the lens it got back. */
+function canFlipCamera(track: MediaStreamTrack | null | undefined, deviceCount: number): boolean {
+  if (deviceCount > 1) return true;
   const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { facingMode?: string[] };
-  return Array.isArray(caps.facingMode) && caps.facingMode.length > 1;
+  if (Array.isArray(caps.facingMode) && caps.facingMode.length > 1) return true;
+  return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 }
 
 /** Calls negotiate a native RTCPeerConnection and the
@@ -555,7 +560,7 @@ export function useWebRTCCall({
         localRef.current = stream;
         micTrackRef.current = stream.getAudioTracks()[0] ?? null;
         setLocalStream(stream);
-        setCanFlip(nextKind === "video" && (await canFlipCamera(stream.getVideoTracks()[0])));
+        setCanFlip(nextKind === "video" && canFlipCamera(stream.getVideoTracks()[0], await countVideoInputs()));
         void refreshDevicesRef.current();
         sendRef.current({ type: "CALL_INVITE", payload: { kind: nextKind } satisfies CallInvitePayload });
         const pc = await attachCall(stream);
@@ -627,7 +632,7 @@ export function useWebRTCCall({
           setKind("audio");
           kindRef.current = "audio";
         }
-        setCanFlip(hasVideo && (await canFlipCamera(stream.getVideoTracks()[0])));
+        setCanFlip(hasVideo && canFlipCamera(stream.getVideoTracks()[0], await countVideoInputs()));
         void refreshDevicesRef.current();
       } catch {
         hangupInternal(true);
@@ -693,7 +698,7 @@ export function useWebRTCCall({
     setKind("video");
     kindRef.current = "video";
     setCameraOff(false);
-    setCanFlip(await canFlipCamera(track));
+    setCanFlip(canFlipCamera(track, await countVideoInputs()));
     const id = track.getSettings().deviceId;
     if (id) {
       cameraIdRef.current = id;
@@ -935,53 +940,83 @@ export function useWebRTCCall({
   }, [replaceTrackKind, restoreCameraAfterShare, sharing]);
 
   const flipCamera = useCallback(async () => {
-    if (!canFlip || sharing || phaseRef.current !== "active" || kindRef.current !== "video") return;
-    const next: FacingMode = facingRef.current === "user" ? "environment" : "user";
-    try {
-      let cam: MediaStream;
-      try {
-        cam = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { exact: next } },
-        });
-      } catch {
-        cam = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: next } },
-        });
+    if (!canFlip || sharingRef.current || phaseRef.current !== "active" || kindRef.current !== "video") return;
+    const prev = facingRef.current;
+    const next: FacingMode = prev === "user" ? "environment" : "user";
+
+    // ORDER MATTERS ON PHONES. A handset exposes one camera and refuses to
+    // hand out a second stream while the first is still live — the request
+    // fails with NotReadableError and the lens never moves, which is exactly
+    // what "the button does nothing" looked like. Release the current track
+    // FIRST, then acquire. Audio is captured before the swap so the call is
+    // never interrupted; the peer sees a sub-second black frame instead.
+    const audio = localRef.current?.getAudioTracks() ?? [];
+    localRef.current?.getVideoTracks().forEach((t) => t.stop());
+
+    const acquire = async (facing: FacingMode): Promise<MediaStream | null> => {
+      // `exact` first, `ideal` as a fallback for engines that reject it.
+      for (const video of [{ facingMode: { exact: facing } }, { facingMode: { ideal: facing } }]) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+          if (!stream.getVideoTracks()[0]) {
+            stopStream(stream);
+            continue;
+          }
+          // `ideal` is permitted to be IGNORED: some engines accept it and
+          // hand back the very same lens, which would leave the user staring
+          // at the same camera while facingRef claims otherwise. A stream
+          // that is not the requested lens is worthless here — drop it and
+          // try the next form.
+          const actual = (stream.getVideoTracks()[0]!.getSettings?.() as
+            | { facingMode?: string }
+            | undefined)?.facingMode;
+          if (actual && actual !== facing) {
+            stopStream(stream);
+            continue;
+          }
+          return stream;
+        } catch {
+          // refused this form, try the next one
+        }
       }
-      facingRef.current = next;
-      const newTrack = cam.getVideoTracks()[0];
-      if (!newTrack) {
-        stopStream(cam);
-        return;
-      }
-      // Some engines accept `ideal: facingMode` and hand back the SAME lens
-      // instead of failing. Committing the new facing blindly would leave
-      // facingRef claiming a camera the user is not actually looking at, and
-      // the next flip would appear to do nothing. Verify before swapping.
-      const actual = (newTrack.getSettings?.() as { facingMode?: string } | undefined)?.facingMode;
-      if (actual && actual !== next) {
-        stopStream(cam);
-        facingRef.current = next === "user" ? "environment" : "user";
-        return;
-      }
-      await replaceTrackKind("video", newTrack);
-      const old = localRef.current;
-      old?.getVideoTracks().forEach((t) => t.stop());
-      const audio = old?.getAudioTracks() ?? [];
-      const mixed = new MediaStream([...audio, newTrack]);
-      localRef.current = mixed;
-      setLocalStream(mixed);
-      const id = newTrack.getSettings().deviceId;
-      if (id) {
-        cameraIdRef.current = id;
-        setCameraId(id);
-      }
-    } catch {
-      facingRef.current = next === "user" ? "environment" : "user";
+      return null;
+    };
+
+    // Ask for the opposite lens; if the handset cannot deliver it, put the
+    // one the user was watching back rather than leaving them with no camera.
+    let got = next;
+    let cam = await acquire(got);
+    if (!cam) {
+      got = prev;
+      cam = await acquire(got);
     }
-  }, [canFlip, replaceTrackKind, sharing]);
+    facingRef.current = got;
+
+    const newTrack = cam?.getVideoTracks()[0];
+    if (!newTrack) {
+      stopStream(cam);
+      // Nothing could be acquired at all. Park the camera on the off stub so
+      // the peer keeps a live stream rather than a frozen last frame.
+      const stub = makeSilentVideoTrack();
+      await replaceTrackKind("video", stub);
+      const fallback = new MediaStream([...audio, stub]);
+      localRef.current = fallback;
+      setLocalStream(fallback);
+      setCameraOff(true);
+      return;
+    }
+
+    await replaceTrackKind("video", newTrack);
+    const mixed = new MediaStream([...audio, newTrack]);
+    localRef.current = mixed;
+    setLocalStream(mixed);
+    setCameraOff(false);
+    const id = newTrack.getSettings().deviceId;
+    if (id) {
+      cameraIdRef.current = id;
+      setCameraId(id);
+    }
+  }, [canFlip, replaceTrackKind]);
 
   const refreshDevices = useCallback(async () => {
     try {
