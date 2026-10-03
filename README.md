@@ -27,7 +27,7 @@ The project treats server-side storage as the root of privacy failure and remove
 - **No third-party signaling.** WebRTC negotiation (`CALL_OFFER` / `CALL_ANSWER` / `CALL_ICE`) rides the same two-seat blind relay as chat traffic. No public signaling cloud ever sees a peer ID, an SDP, or a local IP address.
 - **Bounded resource use.** A single WS frame is capped at 10 MB (`SetReadLimit`), each connection buffers 4 KB per direction, and a global ceiling of 600 live sockets sheds load with `503` rather than an OOM kill. Outbound queues apply backpressure and drop a stalled consumer after 5 s.
 - **No single packet can kill the process.** Every relay goroutine and every HTTP handler runs behind a `recover()`, so a malformed frame costs one socket, never the service.
-- **Orderly shutdown.** `SIGINT` / `SIGTERM` (Render, Cloudflare) burn every room through the normal destruction path — clients receive `ROOM_BURNED` instead of a dropped socket — and in-flight HTTP drains inside a 10 s grace window.
+- **Orderly shutdown.** `SIGINT` / `SIGTERM` (Render and other PaaS platforms) burn every room through the normal destruction path — clients receive `ROOM_BURNED` instead of a dropped socket — and in-flight HTTP drains inside a 10 s grace window.
 
 ## 3. Cryptographic Specification
 
@@ -151,8 +151,7 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 ├── LICENSE                        # AGPL-3.0
 ├── Dockerfile                     # single-image build, runs as UID 10001
 ├── docker-compose.yml
-├── render.yaml                    # Render service definition (relay)
-└── vercel.json                    # Vercel static hosting + SPA rewrites (client)
+└── render.yaml                    # Render web service definition (relay)
 ```
 
 ## 8. Configuration & Environment Variables
@@ -222,17 +221,29 @@ docker compose logs -f
 docker compose down
 ```
 
-### Split deployment (Vercel + Render + Cloudflare)
+### Deployment on Render
 
-The client is same-origin by default, so a split topology needs two things: a Vercel build pointed at the relay, and a route for `/api` + `/ws`.
+A room lives in one process's RAM, so the relay must run as a **single instance** — never behind autoscaling, and never with sticky-session assumptions. There are two ways to put this on Render.
 
-| Piece            | Configuration                                                        |
-| ---------------- | -------------------------------------------------------------------- |
-| Client (Vercel)  | `vercel.json` builds `frontend/` and rewrites unknown paths to `index.html` so `/room/:id` survives a hard refresh. Set `VITE_API_BASE` and `VITE_WS_URL` to the relay origin |
-| Relay (Render)   | `render.yaml` builds the single-image Dockerfile, exposes `/healthz`, and expects `ALLOWED_ORIGINS` to contain the Vercel domain |
-| Edge (Cloudflare)| Route `/api/*` and `/ws/*` to the Render service; everything else stays on Vercel |
+**Option A — one web service (recommended).** The relay already serves the compiled SPA (`SHARD_STATIC` plus an `index.html` fallback for client-side routes), so a single Docker service covers the client, `/api` and `/ws` on one origin. Nothing to configure in the browser build, no CORS, no cross-origin WebSocket.
 
-A room lives in one process's RAM, so the relay must run as a **single instance** — never behind autoscaling, and never with sticky-session assumptions.
+| Setting           | Value                                                     |
+| ----------------- | --------------------------------------------------------- |
+| Runtime           | Docker (uses the repository `Dockerfile`)                 |
+| Health check path | `/healthz`                                               |
+| Environment       | `ALLOWED_ORIGINS` = your own domain (see below)          |
+
+**Option B — two services.** Render **Static Site** for the client plus a Docker **Web Service** for the relay. Two origins, so the browser build must be told where the relay lives.
+
+| Piece             | Configuration                                                                 |
+| ----------------- | ----------------------------------------------------------------------------- |
+| Static Site       | Root directory `frontend`, build `npm install && npm run build`, publish `dist` |
+| Static Site       | Rewrite rule `/*  /index.html  200` — without it a hard refresh on `/room/:id` 404s |
+| Static Site       | `VITE_API_BASE` = `https://<relay>.onrender.com`, `VITE_WS_URL` = `wss://<relay>.onrender.com` |
+| Web Service       | Same Docker image and `/healthz` as option A                                   |
+| Web Service       | `ALLOWED_ORIGINS` = the static site's origin (`https://<site>.onrender.com`)     |
+
+`ALLOWED_ORIGINS` is a strict allow-list and gates both the CORS preflight for `POST /api/rooms` and the WebSocket `Origin` check. Leave it unset and the relay stays in dev mode: loopback origins only, with a startup warning.
 
 In-browser cryptographic self-test (key agreement, deterministic fingerprints, GCM round-trips):
 

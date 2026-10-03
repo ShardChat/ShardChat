@@ -77,7 +77,7 @@ func (l *creatorLimiter) allow(key string) bool {
 
 // clientKey derives the rate-limit key: the real client IP without port.
 //
-// Behind a trusted proxy (Render, Cloudflare) the edge APPENDS the address it
+// Behind a trusted proxy (Render, or any reverse proxy) the edge APPENDS the address it
 // actually saw to the right of X-Forwarded-For. The left-most entry is whatever
 // the client sent, so keying on it let anyone bypass the limiter with one forged
 // header; the right-most entry is written by our own edge and is the only one
@@ -246,7 +246,7 @@ func main() {
 		// Deliberately no WriteTimeout: it would kill long-lived WS connections.
 	}
 
-	// Render and Cloudflare both signal SIGTERM before a redeploy. Exiting on it
+	// Render and other PaaS platforms signal SIGTERM before a redeploy. Exiting on it
 	// would drop every live socket without a goodbye; instead every room is told
 	// the session is over (ROOM_BURNED + close frame, the same path a manual burn
 	// takes) and in-flight HTTP drains inside a grace window.

@@ -1,6 +1,21 @@
-# SHARD — single Render service: the Go relay plus the compiled SPA.
+# SHARD — Render blueprint for the Go relay.
+#
 # The relay is in-memory by design, so it must be a single instance and must
 # never sit behind autoscaling: rooms live in this process's RAM.
+#
+# This blueprint covers the relay only. Two supported topologies, both on
+# Render (see README section 9):
+#
+#   A) one web service — this blueprint alone. The image also serves the
+#      compiled SPA (SHARD_STATIC + index.html fallback), so client, /api and
+#      /ws share one origin: no CORS, no VITE_* build variables.
+#
+#   B) static site + this service — create the Static Site from the dashboard
+#      (root directory `frontend`, build `npm install && npm run build`,
+#      publish `dist`, rewrite `/*  /index.html  200`) and set on it
+#      VITE_API_BASE=https://shard-relay.onrender.com and
+#      VITE_WS_URL=wss://shard-relay.onrender.com. Then set ALLOWED_ORIGINS
+#      below to that static site's origin.
 services:
   - type: web
     name: shard-relay
@@ -18,12 +33,13 @@ services:
       # first, so the relay always binds where the platform expects.
       - key: PORT
         sync: false
+      # Only used by topology A, where this process also serves the SPA.
       - key: SHARD_STATIC
         value: /app/frontend/dist
       # Browser origins allowed to open a relay socket. Strict allow-list:
       # anything else is rejected with 403 before the upgrade, and an
-      # Origin-less handshake is refused outright. Replace with the real
-      # production domain(s), comma-separated.
+      # Origin-less handshake is refused outright. For topology A put your own
+      # domain here; for topology B put the static site's origin.
       - key: ALLOWED_ORIGINS
         sync: false
       # Optional TURN broker. Unset -> STUN-only ICE (direct P2P reachable

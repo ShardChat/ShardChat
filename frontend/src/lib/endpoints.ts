@@ -2,7 +2,7 @@
 //
 // By default the client is same-origin: the SPA, /api and /ws are served by
 // one process, so nothing is configured and the browser's own origin is used.
-// When the static bundle (Vercel) and the Go relay (Render) live on different
+// When the static bundle and the Go relay are served from different
 // hosts, VITE_API_BASE / VITE_WS_URL point at the relay and every REST call
 // and the socket upgrade become cross-origin — which the relay allows through
 // its CORS middleware and its ALLOWED_ORIGINS allow-list.

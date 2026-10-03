@@ -30,7 +30,7 @@ const (
 	ReasonBurn     RemovalReason = "burned_by_user"
 	ReasonEmpty    RemovalReason = "both_peers_left"
 	ReasonPeerLeft RemovalReason = "peer_left"
-	// ReasonShutdown marks a platform-initiated teardown (Render / Cloudflare
+	// ReasonShutdown marks a platform-initiated teardown (Render or any PaaS
 	// SIGTERM). Clients get the same ROOM_BURNED goodbye as any other burn, so
 	// a redeploy reads as "session ended" instead of "connection lost".
 	ReasonShutdown RemovalReason = "server_shutdown"
