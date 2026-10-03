@@ -117,11 +117,13 @@ function RoundBtn({
   label,
   onClick,
   tone = "idle",
+  disabled = false,
   children,
 }: {
   label: string;
   onClick: () => void;
   tone?: "idle" | "off" | "end" | "on";
+  disabled?: boolean;
   children: ReactNode;
 }) {
   const cls =
@@ -138,7 +140,8 @@ function RoundBtn({
       title={label}
       aria-label={label}
       onClick={onClick}
-      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${cls}`}
+      disabled={disabled}
+      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${cls}`}
     >
       {children}
     </button>
@@ -273,8 +276,9 @@ export function CallStage(props: UseWebRTCCallResult) {
       <RoundBtn
         label="Flip camera"
         onClick={() => void props.flipCamera()}
+        disabled={!props.canFlip}
       >
-        <SwitchCamera className={`h-5 w-5 ${props.canFlip ? "" : "opacity-40"}`} />
+        <SwitchCamera className="h-5 w-5" />
       </RoundBtn>
       <div className="relative" ref={settingsRef}>
         <RoundBtn label="Devices" onClick={() => setSettingsOpen((v) => !v)} tone={settingsOpen ? "on" : "idle"}>

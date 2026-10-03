@@ -17,6 +17,20 @@ const MaxClients = 2
 // mobile network flaps; a peer re-joining cancels the pending burn.
 const emptyGracePeriod = 10 * time.Second
 
+// PairGracePeriod is how long a room waits after ONE of its two peers drops
+// before burning for good.
+//
+// A dropped socket is not the same as a departure: a phone that opens the
+// photo picker, switches app or loses signal for a moment suspends its
+// WebSocket, and the OS never sends a close frame. Burning instantly locked
+// both participants out of a live session over a backgrounded tab. During
+// this window the room stays open and ONLY the seat that left may take the
+// free place back, so a returning phone resumes instead of being refused as
+// a third wheel - and a stranger holding the link cannot use the gap.
+//
+// Overridable at boot from SHARD_PEER_GRACE_SECONDS in cmd/server.
+var PairGracePeriod = 45 * time.Second
+
 // maxCachedEnvelope caps the handshake cache: the room stores one
 // KEY_EXCHANGE packet — a ~400-byte public key envelope — never bulk data.
 const maxCachedEnvelope = 1 << 16 // 64 KB
@@ -76,6 +90,12 @@ type Room struct {
 	// graceTimer delays the empty-room burn (StrictMode ghost protection).
 	graceTimer *time.Timer
 
+	// pairTimer holds a one-peer room open for PairGracePeriod after its
+	// partner drops, and pendingSeat names the ONLY seat allowed to reclaim
+	// it. Both are nil/"" while the pair is intact.
+	pairTimer   *time.Timer
+	pendingSeat string
+
 	// cachedEnvelope is the first relayed handshake packet (the peer's
 	// KEY_EXCHANGE with its public key), stored opaquely and replayed to any
 	// client that joins later. The room never parses it. Only the FIRST
@@ -106,7 +126,23 @@ func newRoom(id string, ttl time.Duration, m *RoomManager, hooks Hooks) *Room {
 // seat is taken the room locks and fires a PeerJoined event.
 func (r *Room) TryAdd(c *Client) bool {
 	r.mu.Lock()
-	if r.closed || len(r.clients) >= MaxClients {
+	if r.closed {
+		r.mu.Unlock()
+		return false
+	}
+	// While a dropped peer is still inside its reconnect window the free seat
+	// is RESERVED for that seat alone. Matching seat -> the session resumes;
+	// anything else (a third participant holding the link) is refused.
+	if r.pairTimer != nil {
+		if r.pendingSeat != c.Seat {
+			r.mu.Unlock()
+			return false
+		}
+		r.pairTimer.Stop()
+		r.pairTimer = nil
+		r.pendingSeat = ""
+	}
+	if len(r.clients) >= MaxClients {
 		r.mu.Unlock()
 		return false
 	}
@@ -266,11 +302,71 @@ func (r *Room) removeClient(c *Client) {
 	// Two-person session: one departure ends it for the survivor, in BOTH
 	// directions. The departed peer's socket dies asynchronously, so this also
 	// fires when the FIRST of two peers leaves — do not branch on which seat
-	// dropped. Burn immediately so the survivor's transport turns off and the
-	// link becomes permanently unjoinable.
+	// dropped.
+	//
+	// It is held open for PairGracePeriod rather than burned instantly: the
+	// survivor is told at once, but a phone that merely went to the background
+	// (photo picker, app switch, a lost bar of signal) gets its seat back
+	// instead of finding the session burned. If nobody returns, the burn
+	// happens anyway and the link becomes permanently unjoinable.
 	if pairWasFull {
-		r.manager.removeRoom(r.ID, ReasonPeerLeft)
+		r.startPairGrace(c.Seat)
 	}
+}
+
+// startPairGrace arms the post-departure window, reserving the free seat for
+// the participant that left it.
+func (r *Room) startPairGrace(seat string) {
+	r.mu.Lock()
+	if r.closed || r.pairTimer != nil {
+		r.mu.Unlock()
+		return
+	}
+	r.pendingSeat = seat
+	r.pairTimer = time.AfterFunc(PairGracePeriod, func() {
+		r.mu.Lock()
+		armed := !r.closed && r.pairTimer != nil
+		r.pairTimer = nil
+		r.pendingSeat = ""
+		r.mu.Unlock()
+		if armed {
+			log.Printf("[room] peer did not return id=%s — burning after the reconnect window", r.ID)
+			r.manager.removeRoom(r.ID, ReasonPeerLeft)
+		}
+	})
+	r.mu.Unlock()
+}
+
+// EvictSeat unregisters the client holding the given opaque seat token and
+// returns it, or nil when no token was supplied or none matched.
+//
+// A reconnect can outrun the relay's own detection of a dead socket: the OS
+// dropped the TCP connection long before the server notices, so the stale
+// peer still occupies a seat. Handing it back to the participant who is
+// actually here is what stops a returning phone from being turned away as a
+// third wheel. The stale client is returned so the caller can shut it down;
+// removeClient then finds it unregistered and stays a no-op, so no PeerLeft
+// event and no burn are emitted for a seat that was immediately reclaimed.
+func (r *Room) EvictSeat(seat string) *Client {
+	if seat == "" {
+		return nil
+	}
+	r.mu.Lock()
+	var stale *Client
+	for c := range r.clients {
+		if c.Seat == seat {
+			stale = c
+			break
+		}
+	}
+	if stale != nil {
+		delete(r.clients, stale)
+		if len(r.clients) < MaxClients {
+			r.isLocked = false
+		}
+	}
+	r.mu.Unlock()
+	return stale
 }
 
 // closeAll is the single teardown path: stop the TTL timer, let the transport
@@ -287,6 +383,11 @@ func (r *Room) closeAll() {
 	}
 	if r.graceTimer != nil {
 		r.graceTimer.Stop()
+	}
+	if r.pairTimer != nil {
+		r.pairTimer.Stop()
+		r.pairTimer = nil
+		r.pendingSeat = ""
 	}
 	clients := make([]*Client, 0, len(r.clients))
 	for c := range r.clients {

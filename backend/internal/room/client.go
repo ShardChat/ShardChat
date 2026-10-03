@@ -41,6 +41,12 @@ type Client struct {
 	once    sync.Once
 	writeMu sync.Mutex // gorilla/websocket forbids concurrent writes
 
+	// Seat is an opaque per-tab token supplied by the browser on the upgrade
+	// request. It identifies the PARTICIPANT, not the connection, so a client
+	// that reconnects can take its own seat back instead of being refused as
+	// a third peer. Never parsed, never logged, carries no identity.
+	Seat string
+
 	// Handshake state bits: JoinSeen/KeySeen gate what the relay router may
 	// forward for this connection. Guarded by its own mutex because it is read
 	// from the read pump, from other pumps and from the room.
@@ -78,12 +84,14 @@ func (c *Client) resetState() {
 }
 
 // NewClient creates a client bound to a room. Call Start after TryAdd.
-func NewClient(r *Room, conn *websocket.Conn) *Client {
+// seat is the opaque participant token used to reclaim a dropped seat.
+func NewClient(r *Room, conn *websocket.Conn, seat string) *Client {
 	return &Client{
 		room: r,
 		conn: conn,
 		send: make(chan []byte, sendBuffer),
 		quit: make(chan struct{}),
+		Seat: seat,
 	}
 }
 

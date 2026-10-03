@@ -42,6 +42,12 @@ services:
       # domain here; for topology B put the static site's origin.
       - key: ALLOWED_ORIGINS
         sync: false
+      # How long a one-peer room waits for its partner to come back before the
+      # session burns. A phone that merely backgrounded the tab (photo picker,
+      # app switch) drops its socket without a close frame; without this window
+      # that ejected the survivor from a live session. Set 0 to burn instantly.
+      - key: SHARD_PEER_GRACE_SECONDS
+        value: "45"
       # Optional TURN broker. Unset -> STUN-only ICE (direct P2P reachable
       # peers only). The API key is read in Go and never sent to the browser.
       - key: METERED_DOMAIN

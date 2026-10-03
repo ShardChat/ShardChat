@@ -62,6 +62,7 @@ func (h *Handler) CreateRoom(ttl time.Duration) (*room.Room, error) {
 //	503 — the global connection budget is exhausted
 func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	roomID := r.PathValue("roomId")
+	seat := seatOf(r)
 
 	rm, ok := h.Manager.GetRoom(roomID)
 	if !ok {
@@ -71,6 +72,15 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		// later.
 		rejectGone(w, r, h.Upgrader)
 		return
+	}
+	if rm.ClientCount() >= room.MaxClients {
+		// The relay can only find out about a dropped phone socket when the
+		// TCP stack finally gives up, which is long after the phone came back.
+		// If the participant arriving now is the one still holding that stale
+		// seat, hand it back instead of refusing them as a third wheel.
+		if stale := rm.EvictSeat(seat); stale != nil {
+			stale.Shutdown()
+		}
 	}
 	if rm.ClientCount() >= room.MaxClients {
 		writeJSON(w, http.StatusForbidden, ErrorPayload{Error: "Room is full (2/2 peers)."})
@@ -91,7 +101,7 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := room.NewClient(rm, conn)
+	c := room.NewClient(rm, conn, seat)
 	if !rm.TryAdd(c) {
 		// Lost the race: the room filled between the check and the upgrade.
 		raw, _ := json.Marshal(Packet{
@@ -121,6 +131,33 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if env := rm.CachedEnvelopeFor(c); env != nil {
 		_ = c.SendSync(env)
 	}
+}
+
+// maxSeatLen caps the participant token; anything longer is ignored and the
+// client simply falls back to anonymous reconnect behaviour.
+const maxSeatLen = 32
+
+// seatOf reads the opaque participant token from the upgrade request.
+//
+// It is a random per-tab value used only to tell "the same participant came
+// back" from "a third peer arrived". It carries no identity, is never logged
+// and never relayed, so a malformed or oversized value is simply dropped:
+// a client without a valid token still connects, it just cannot reclaim a
+// seat across a reconnect.
+func seatOf(r *http.Request) string {
+	seat := r.URL.Query().Get("seat")
+	if seat == "" || len(seat) > maxSeatLen {
+		return ""
+	}
+	for i := 0; i < len(seat); i++ {
+		c := seat[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		default:
+			return ""
+		}
+	}
+	return seat
 }
 
 // appTypes are the relayed packet types that may carry user traffic. They

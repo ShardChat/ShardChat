@@ -21,7 +21,7 @@ The project treats server-side storage as the root of privacy failure and remove
 - **Zero knowledge by construction.** All encryption happens in the browser via the native Web Crypto API. The relay only ever sees public keys and authenticated ciphertext; it cannot decrypt, filter, or moderate content.
 - **In-memory Go runtime.** Rooms, peer registrations, and TTL timers live exclusively in process RAM. Nothing is written to disk, to a log, or to a database. Process restart equals total amnesia.
 - **Strictly two participants.** A room accepts exactly two WebSocket peers. The third connection is rejected with `403 Room is full (2/2 peers)`.
-- **Guaranteed destruction.** A room is destroyed through a single code path — TTL expiry, the manual burn button, or the last peer disconnecting. Sockets are closed, the map entry is deleted, timers are stopped. Deletion is immediate and unrecoverable.
+- **Guaranteed destruction.** A room is destroyed through a single code path — TTL expiry, the manual burn button, or the last peer disconnecting. Sockets are closed, the map entry is deleted, timers are stopped. Deletion is immediate and unrecoverable. (A single peer dropping is not treated as a departure: the room holds its seat open for `SHARD_PEER_GRACE_SECONDS` so a backgrounded phone can come back — see *Peer departure and the reconnect window*.)
 - **Blind transport.** Application payloads (`CIPHER_MESSAGE`, file chunks, edits, reactions, polls) are sealed JSON envelopes. The server relays them without inspection.
 - **Minimal operational metadata.** Logs contain room IDs and destruction reasons only — never payloads, never IP addresses.
 - **No third-party signaling.** WebRTC negotiation (`CALL_OFFER` / `CALL_ANSWER` / `CALL_ICE`) rides the same two-seat blind relay as chat traffic. No public signaling cloud ever sees a peer ID, an SDP, or a local IP address.
@@ -80,8 +80,27 @@ CALL_ICE × N ───────────────►  (candidates, bli
        ══ media: DTLS-SRTP direct peer-to-peer, never through the relay ══
 
 BURN_ROOM ───────────────────►  destroy room, close sockets ─►  ROOM_BURNED
-                                [TTL expiry / last peer left / SIGTERM → same path]
+                                [TTL expiry / peer gone for good / SIGTERM → same path]
 ```
+
+### Peer departure and the reconnect window
+
+A dropped socket is not a departure. A phone that opens the photo picker,
+switches app or loses a bar of signal suspends its WebSocket and the OS never
+sends a close frame — the relay only learns about it when the TCP stack gives
+up. Burning the session on that signal ejected both participants from a live
+call, so a two-peer room now survives a departure for `SHARD_PEER_GRACE_SECONDS`
+(45 s by default, `0` restores instant destruction):
+
+1. The survivor is told `PEER_LEFT` immediately and its composer locks.
+2. The free seat is **reserved** for the participant that left, identified by an
+   opaque per-tab token on the upgrade request (`?seat=`). A returning client
+   reclaims its own seat; anyone else is still refused with 403.
+3. If the same participant does not come back before the window closes, the
+   room burns through the normal path.
+
+The token identifies a browser tab, not a person: it carries no identity, is
+never parsed by the relay, never logged and never relayed.
 
 Room existence probes (`GET /api/rooms/{roomId}`) return only `{peerCount, expiresAt}` — enough for a client to distinguish "waiting for peer" from "room burned" without exposing anything else.
 

@@ -48,6 +48,14 @@ function StatusLine({ phase }: { phase: SessionPhase }) {
   if (phase === "burned" || phase === "gone") {
     return <span className="text-[11px] text-tertiary">Session destroyed</span>;
   }
+  if (phase === "peer_away") {
+    return (
+      <span className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-amber-600 dark:text-amber-400">
+        <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500 dark:bg-amber-400" />
+        Peer disconnected — waiting
+      </span>
+    );
+  }
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-secondary">
       <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-line-strong" />

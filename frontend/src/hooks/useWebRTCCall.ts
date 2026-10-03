@@ -292,6 +292,19 @@ async function countVideoInputs(): Promise<number> {
   }
 }
 
+/** True when the local camera can actually be turned around.
+ *
+ *  A laptop reports two `videoinput` devices, so counting them is enough.
+ *  A phone reports ONE device and exposes front/back as the `facingMode`
+ *  capability of that single lens — counting alone always returns 1 there,
+ *  which disabled the flip button on every mobile browser. Ask the track
+ *  what it can do before deciding. */
+async function canFlipCamera(track: MediaStreamTrack | null | undefined): Promise<boolean> {
+  if (await countVideoInputs() > 1) return true;
+  const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { facingMode?: string[] };
+  return Array.isArray(caps.facingMode) && caps.facingMode.length > 1;
+}
+
 /** Calls negotiate a native RTCPeerConnection and the
  *  offer/answer/ICE travel over the session's own blind relay, so the public
  *  0.peerjs.com signaling cloud never sees a peer id, an SDP or a local IP. */
@@ -352,6 +365,9 @@ export function useWebRTCCall({
   const hangingUpRef = useRef(false);
   const micIdRef = useRef("");
   const cameraIdRef = useRef("");
+  /** How many `videoinput` devices the UA reports right now. A single entry
+   *  means a phone: the lens is chosen with facingMode, never with deviceId. */
+  const videoInputCountRef = useRef(0);
   const speakerIdRef = useRef("");
   const mutedRef = useRef(false);
   const cameraOffRef = useRef(false);
@@ -539,7 +555,7 @@ export function useWebRTCCall({
         localRef.current = stream;
         micTrackRef.current = stream.getAudioTracks()[0] ?? null;
         setLocalStream(stream);
-        setCanFlip(nextKind === "video" && (await countVideoInputs()) > 1);
+        setCanFlip(nextKind === "video" && (await canFlipCamera(stream.getVideoTracks()[0])));
         void refreshDevicesRef.current();
         sendRef.current({ type: "CALL_INVITE", payload: { kind: nextKind } satisfies CallInvitePayload });
         const pc = await attachCall(stream);
@@ -611,7 +627,7 @@ export function useWebRTCCall({
           setKind("audio");
           kindRef.current = "audio";
         }
-        setCanFlip(hasVideo && (await countVideoInputs()) > 1);
+        setCanFlip(hasVideo && (await canFlipCamera(stream.getVideoTracks()[0])));
         void refreshDevicesRef.current();
       } catch {
         hangupInternal(true);
@@ -639,9 +655,13 @@ export function useWebRTCCall({
   }, [muted]);
 
   const attachCameraTrack = useCallback(async () => {
+    // With one reported camera (every phone) deviceId pins the ORIGINAL lens,
+    // so a camera-off/on cycle would silently undo a flip. Drive by facingMode
+    // there and keep the deviceId pin only for real multi-camera machines.
+    const useDeviceId = videoInputCountRef.current > 1 && cameraIdRef.current;
     const cam = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: cameraIdRef.current
+      video: useDeviceId
         ? { deviceId: { ideal: cameraIdRef.current }, ...CAMERA_VIDEO }
         : { facingMode: { ideal: facingRef.current }, ...CAMERA_VIDEO },
     });
@@ -673,7 +693,7 @@ export function useWebRTCCall({
     setKind("video");
     kindRef.current = "video";
     setCameraOff(false);
-    setCanFlip((await countVideoInputs()) > 1);
+    setCanFlip(await canFlipCamera(track));
     const id = track.getSettings().deviceId;
     if (id) {
       cameraIdRef.current = id;
@@ -936,6 +956,16 @@ export function useWebRTCCall({
         stopStream(cam);
         return;
       }
+      // Some engines accept `ideal: facingMode` and hand back the SAME lens
+      // instead of failing. Committing the new facing blindly would leave
+      // facingRef claiming a camera the user is not actually looking at, and
+      // the next flip would appear to do nothing. Verify before swapping.
+      const actual = (newTrack.getSettings?.() as { facingMode?: string } | undefined)?.facingMode;
+      if (actual && actual !== next) {
+        stopStream(cam);
+        facingRef.current = next === "user" ? "environment" : "user";
+        return;
+      }
       await replaceTrackKind("video", newTrack);
       const old = localRef.current;
       old?.getVideoTracks().forEach((t) => t.stop());
@@ -961,7 +991,9 @@ export function useWebRTCCall({
           .filter((d) => d.kind === kind && d.deviceId)
           .map((d, i) => ({ deviceId: d.deviceId, label: deviceLabel(key, d, i) }));
       setAudioInputs(pack("audioinput", "audioinput"));
-      setVideoInputs(pack("videoinput", "videoinput"));
+      const videos = pack("videoinput", "videoinput");
+      setVideoInputs(videos);
+      videoInputCountRef.current = videos.length;
       setAudioOutputs(pack("audiooutput", "audiooutput"));
     } catch {
       /* permissions / insecure context */

@@ -69,6 +69,9 @@ export interface TransferState {
   progress: number; // 0..1
   direction: "up" | "down";
   name: string;
+  /** "prepare" = gated + canvas-compressing (no bytes on the wire yet),
+   *  "stream" = chunked upload/download is running and progress is real. */
+  phase?: "prepare" | "stream";
 }
 
 export interface ChatMessage {

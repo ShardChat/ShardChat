@@ -87,5 +87,37 @@ export function wsBase(): string {
 /** Socket endpoint for a session. The id is percent-encoded so a crafted
  *  path segment can never escape into the query or another route. */
 export function wsEndpoint(roomId: string): string {
-  return `${WS_BASE}/ws/${encodeURIComponent(roomId)}`;
+  return `${WS_BASE}/ws/${encodeURIComponent(roomId)}?seat=${seatToken()}`;
+}
+
+const SEAT_KEY = "shard.seat";
+
+/**
+ * A random token identifying this browser TAB, not the person.
+ *
+ * The relay seats exactly two participants and cannot tell "the same phone
+ * came back after the OS suspended its socket" from "a third peer joined the
+ * link". Sending a stable token lets the server hand the seat back to whoever
+ * already held it, instead of locking the returning participant out of its
+ * own session.
+ *
+ * sessionStorage (not localStorage) is deliberate: it survives a reload in the
+ * same tab — the case that matters — but not across tabs or browser restarts,
+ * so a genuinely new visitor never inherits a seat.
+ */
+function seatToken(): string {
+  try {
+    const existing = sessionStorage.getItem(SEAT_KEY);
+    if (existing) return existing;
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    let token = "";
+    for (const b of bytes) token += b.toString(16).padStart(2, "0");
+    sessionStorage.setItem(SEAT_KEY, token);
+    return token;
+  } catch {
+    // Private mode / blocked storage: connect without a seat. The relay
+    // treats a missing token as "claim no seat" and everything still works
+    // except reclaiming a seat across a reconnect.
+    return "";
+  }
 }

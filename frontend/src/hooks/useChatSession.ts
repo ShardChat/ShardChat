@@ -39,6 +39,7 @@ export type SessionPhase =
   | "waiting" // WS open, waiting for the peer
   | "exchanging" // peer present, keys in flight
   | "secure" // E2EE channel established
+  | "peer_away" // partner dropped; the room holds it open for their return
   | "burned" // room destroyed (by peer or by button)
   | "gone" // room vanished server-side: restart or TTL while away
   | "room_full"; // terminal: both seats taken, this client is not one of them
@@ -318,6 +319,10 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           const p = pkt.payload as PeerEventPayload;
           if (p?.expiresAt) setExpiresAt(p.expiresAt);
           peerJoinedRef.current = true;
+          peerLeftRef.current = false;
+          // The partner took their seat back inside the reconnect window -
+          // leave the waiting state and let the handshake re-arm.
+          setPhase((p2) => (p2 === "peer_away" ? "exchanging" : p2));
           tryKeyExchange();
           break;
         }
@@ -488,12 +493,15 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           break;
         }
         case "PEER_LEFT":
-          // the peer closed the tab or dropped the connection: the server
-          // burns the room for the survivor in the same breath. End the
-          // session right here — do not leave the remaining peer sitting in
-          // half-dead chat until some timer fires.
+          // The partner is gone for now. The relay holds the room open for a
+          // short reconnect window, because a phone that opened the photo
+          // picker or switched apps drops its socket without ever saying
+          // goodbye - burning here is what used to eject the surviving phone
+          // from a perfectly healthy session. The composer locks (phase is no
+          // longer "secure") and the real burn arrives as ROOM_BURNED if the
+          // partner does not come back in time.
           peerLeftRef.current = true;
-          endSession("peer-left");
+          setPhase((p) => (p === "burned" || p === "gone" ? p : "peer_away"));
           break;
         case "ROOM_BURNED":
           // server goodbye before teardown (never sent on a crash/restart).
@@ -657,13 +665,28 @@ export function useChatSession(roomId: string): UseChatSessionResult {
 
   const sendImage = useCallback(
     async (file: File, replyTo?: ChatMessage["id"], viewOnce = false, caption?: string) => {
+      // The row appears BEFORE any work starts. The security gate and the
+      // canvas re-encode of a 12 MP phone photo take seconds, and until the
+      // first byte is encrypted there was nothing on screen at all - the
+      // composer just looked frozen with no way to tell it was still going.
+      const prepId = randomId();
+      const dropPrep = () => setTransfers((prev) => prev.filter((t) => t.fileId !== prepId));
+      setTransfers((prev) => [
+        ...prev,
+        { fileId: prepId, progress: 0, direction: "up", name: file.name, phase: "prepare" },
+      ]);
+
       const gate = await checkFile(file);
       if (!gate.ok) {
+        dropPrep();
         setSecurityNotice(gate.reason);
         return;
       }
       const key = sharedKeyRef.current;
-      if (!key) return;
+      if (!key) {
+        dropPrep();
+        return;
+      }
       const quote = replyTo ? quoteOf(messages, replyTo) : undefined;
       const trimmedCaption = caption?.trim() || undefined;
 
@@ -680,7 +703,10 @@ export function useChatSession(roomId: string): UseChatSessionResult {
       // sealed FILE_CHUNK_START: DELETE_MESSAGE then removes the photo on
       // both sides (receiver previously minted its own id → delete missed).
       const messageId = randomId();
-      setTransfers((prev) => [...prev, { fileId, progress: 0, direction: "up", name: file.name }]);
+      setTransfers((prev) => [
+        ...prev.filter((t) => t.fileId !== prepId),
+        { fileId, progress: 0, direction: "up", name: file.name, phase: "stream" },
+      ]);
       await sendFile(payload, {
         sharedKey: key,
         caption: trimmedCaption,
@@ -713,17 +739,30 @@ export function useChatSession(roomId: string): UseChatSessionResult {
    *  forwards frames blind and buffers nothing. */
   const sendAttachment = useCallback(
     async (file: File, caption?: string) => {
+      const prepId = randomId();
+      const dropPrep = () => setTransfers((prev) => prev.filter((t) => t.fileId !== prepId));
+      setTransfers((prev) => [
+        ...prev,
+        { fileId: prepId, progress: 0, direction: "up", name: file.name, phase: "prepare" },
+      ]);
       const gate = await checkFile(file);
       if (!gate.ok) {
+        dropPrep();
         setSecurityNotice(gate.reason);
         return;
       }
       const key = sharedKeyRef.current;
-      if (!key) return;
+      if (!key) {
+        dropPrep();
+        return;
+      }
       const trimmedCaption = caption?.trim() || undefined;
       const messageId = randomId();
       const fileId = randomId();
-      setTransfers((prev) => [...prev, { fileId, progress: 0, direction: "up", name: file.name }]);
+      setTransfers((prev) => [
+        ...prev.filter((t) => t.fileId !== prepId),
+        { fileId, progress: 0, direction: "up", name: file.name, phase: "stream" },
+      ]);
       await sendFile(file, {
         sharedKey: key,
         caption: trimmedCaption,

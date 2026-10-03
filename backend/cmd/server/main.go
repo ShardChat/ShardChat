@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -126,6 +127,19 @@ func main() {
 		log.Printf("[shard-relay] ALLOWED_ORIGINS is not set — DEV MODE: only loopback (localhost/127.0.0.1) origins are accepted; set ALLOWED_ORIGINS=https://your.domain for production")
 	}
 
+	// How long a one-peer room waits for its partner to come back before the
+	// session burns for good. A phone that merely backgrounded the tab must not
+	// end a live session, but an absent partner must not keep it alive forever.
+	grace := room.PairGracePeriod
+	if raw := strings.TrimSpace(os.Getenv("SHARD_PEER_GRACE_SECONDS")); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 && secs <= 600 {
+			grace = time.Duration(secs) * time.Second
+		} else {
+			log.Printf("[shard-relay] ignoring invalid SHARD_PEER_GRACE_SECONDS=%q (want 0..600)", raw)
+		}
+	}
+	room.PairGracePeriod = grace
+
 	manager := room.NewRoomManager()
 	wsHandler := &ws.Handler{Manager: manager, Upgrader: ws.NewUpgrader(origin)}
 
@@ -229,7 +243,7 @@ func main() {
 	if originLabel == "" {
 		originLabel = "dev-loopback"
 	}
-	log.Printf("[shard-relay] SHARD blind relay on %s (origins: %s) — zero persistence, zero content logs", addr, originLabel)
+	log.Printf("[shard-relay] SHARD blind relay on %s (origins: %s; peer reconnect window %s) — zero persistence, zero content logs", addr, originLabel, room.PairGracePeriod)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           httpx.SecurityHeaders(withCORS(origin, httpx.Recover(mux))),

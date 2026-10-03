@@ -155,13 +155,19 @@ export function MessageList({
             <div className="card w-56 rounded-2xl px-3 py-2">
               <div className="mb-1 flex justify-between text-[10px] text-tertiary">
                 <span className="truncate">{t.direction === "up" ? "↑" : "↓"} {t.name}</span>
-                <span>{Math.round(t.progress * 100)}%</span>
+                {/* Before the first byte is encrypted the percentage would sit
+                    frozen on 0% and read as "stalled". Name the phase instead. */}
+                <span>{t.phase === "prepare" ? "preparing…" : `${Math.round(t.progress * 100)}%`}</span>
               </div>
               <div className="well h-1.5 overflow-hidden rounded-full">
-                <div
-                  className="h-full rounded-full bg-zinc-500 transition-all duration-150 dark:bg-zinc-400"
-                  style={{ width: `${t.progress * 100}%` }}
-                />
+                {t.phase === "prepare" ? (
+                  <div className="h-full w-full animate-pulse rounded-full bg-zinc-400/50 dark:bg-zinc-500/50" />
+                ) : (
+                  <div
+                    className="h-full rounded-full bg-zinc-500 transition-all duration-150 dark:bg-zinc-400"
+                    style={{ width: `${t.progress * 100}%` }}
+                  />
+                )}
               </div>
             </div>
           </div>
