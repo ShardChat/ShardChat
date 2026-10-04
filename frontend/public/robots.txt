@@ -5,4 +5,8 @@ User-agent: *
 Allow: /
 Disallow: /room/
 
+# Declares the sitemap explicitly; /room/ stays excluded there too, so a
+# disposable session URL can never enter an index from either direction.
+Sitemap: https://shardchat.onrender.com/sitemap.xml
+
 # No crawl-delay: the relay keeps no logs to protect anyway.

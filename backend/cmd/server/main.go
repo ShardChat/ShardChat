@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -283,12 +285,38 @@ func main() {
 	log.Printf("[shard-relay] stopped cleanly")
 }
 
-// spaFallback serves index.html for client-side routes (/room/:id) that
-// have no file on disk. Without it a hard refresh inside a room would 404.
+// spaFallback serves a real file from the SPA build whenever the request maps
+// to one. frontend/public ships files that must be answered with their own
+// bytes - sitemap.xml, robots.txt, favicon.svg, logo.png - and answering them
+// with index.html reports 200 while handing back the app shell, which is worse
+// than a 404: a crawler asking for /sitemap.xml is told the request succeeded
+// and then fails to parse HTML as XML, and nothing in the status line shows it.
+//
+// Every other path is a client-side route (/donate, /room/:id) and gets
+// index.html, so a hard refresh or a shared link still boots the SPA.
 func spaFallback(root string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rel := safeRelPath(r.URL.Path); rel != "" {
+			candidate := filepath.Join(root, rel)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, candidate)
+				return
+			}
+		}
 		http.ServeFile(w, r, root+"/index.html")
 	}
+}
+
+// safeRelPath maps a request path to a path relative to the SPA root, or "" when
+// it names no single file. path.Clean on an absolute path collapses every "..",
+// so a traversal attempt like /../../etc/passwd reduces to /etc/passwd and can
+// only ever resolve back inside root.
+func safeRelPath(urlPath string) string {
+	clean := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(urlPath, "/")), "/")
+	if clean == "" || clean == "." {
+		return ""
+	}
+	return filepath.FromSlash(clean)
 }
 
 func withCORS(allowedSpec string, next http.Handler) http.Handler {
