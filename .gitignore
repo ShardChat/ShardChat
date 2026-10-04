@@ -1,5 +1,6 @@
 # Go
 backend/bin/
+backend/app
 *.exe
 *.test
 *.out

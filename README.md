@@ -244,23 +244,28 @@ docker compose down
 
 A room lives in one process's RAM, so the relay must run as a **single instance** — never behind autoscaling, and never with sticky-session assumptions. There are two ways to put this on Render.
 
-**Option A — one web service (recommended).** The relay already serves the compiled SPA (`SHARD_STATIC` plus an `index.html` fallback for client-side routes), so a single Docker service covers the client, `/api` and `/ws` on one origin. Nothing to configure in the browser build, no CORS, no cross-origin WebSocket.
+**Option A — static site + relay (two services, two origins).** Render **Static Site** for the client plus a **Web Service** for the relay. Two origins, so the browser build must be told where the relay lives.
 
-| Setting           | Value                                                     |
-| ----------------- | --------------------------------------------------------- |
-| Runtime           | Docker (uses the repository `Dockerfile`)                 |
-| Health check path | `/healthz`                                               |
-| Environment       | `ALLOWED_ORIGINS` = your own domain (see below)          |
+| Piece       | Configuration                                                                   |
+| ----------- | -------------------------------------------------------------------------------- |
+| Static Site | Root directory `frontend`, build `npm install && npm run build`, publish `dist`  |
+| Static Site | Rewrite rule `/*  /index.html  200` — without it a hard refresh on `/room/:id` 404s |
+| Static Site | `VITE_API_BASE` = `https://<relay>.onrender.com`, `VITE_WS_URL` = `wss://<relay>.onrender.com` |
+| Web Service | Runtime **Go**, root directory **`backend`**                                      |
+| Web Service | Build `go build -tags netgo -ldflags '-s -w' -o app ./cmd/server`, start `./app` |
+| Web Service | Health check path `/healthz`, `ALLOWED_ORIGINS` = the static site's origin        |
 
-**Option B — two services.** Render **Static Site** for the client plus a Docker **Web Service** for the relay. Two origins, so the browser build must be told where the relay lives.
+The package must be named in the build command: the `backend/` module root holds no `.go` file itself, so a bare `go build` there fails with `no Go files in .../backend`.
 
-| Piece             | Configuration                                                                 |
-| ----------------- | ----------------------------------------------------------------------------- |
-| Static Site       | Root directory `frontend`, build `npm install && npm run build`, publish `dist` |
-| Static Site       | Rewrite rule `/*  /index.html  200` — without it a hard refresh on `/room/:id` 404s |
-| Static Site       | `VITE_API_BASE` = `https://<relay>.onrender.com`, `VITE_WS_URL` = `wss://<relay>.onrender.com` |
-| Web Service       | Same Docker image and `/healthz` as option A                                   |
-| Web Service       | `ALLOWED_ORIGINS` = the static site's origin (`https://<site>.onrender.com`)     |
+Root directory `backend` also scopes auto-deploy to `backend/` — frontend-only commits will not redeploy the relay, which is what you want when the client is its own service.
+
+**Option B — one web service serving everything.** Switch the runtime to **Docker** and Render builds the repository `Dockerfile`, which compiles the SPA and serves it from the same process. Client, `/api` and `/ws` share one origin: no CORS, no `VITE_*` build variables, no rewrite rule.
+
+| Setting           | Value                                                |
+| ----------------- | ---------------------------------------------------- |
+| Runtime           | Docker (uses the repository `Dockerfile`)            |
+| Health check path | `/healthz`                                          |
+| Environment       | `ALLOWED_ORIGINS` = your own domain                 |
 
 `ALLOWED_ORIGINS` is a strict allow-list and gates both the CORS preflight for `POST /api/rooms` and the WebSocket `Origin` check. Leave it unset and the relay stays in dev mode: loopback origins only, with a startup warning.
 

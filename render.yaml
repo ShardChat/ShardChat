@@ -3,26 +3,34 @@
 # The relay is in-memory by design, so it must be a single instance and must
 # never sit behind autoscaling: rooms live in this process's RAM.
 #
-# This blueprint covers the relay only. Two supported topologies, both on
-# Render (see README section 9):
+# Two supported topologies, both on Render (see README section 9):
 #
-#   A) one web service — this blueprint alone. The image also serves the
-#      compiled SPA (SHARD_STATIC + index.html fallback), so client, /api and
-#      /ws share one origin: no CORS, no VITE_* build variables.
+#   A) static site + this service (two origins)
+#      Static Site from the dashboard: root directory `frontend`, build
+#      `npm install && npm run build`, publish directory `dist`, rewrite rule
+#      `/*  /index.html  200`, and environment
+#        VITE_API_BASE=https://<this-service>.onrender.com
+#        VITE_WS_URL=wss://<this-service>.onrender.com
+#      then set ALLOWED_ORIGINS below to that static site's origin.
 #
-#   B) static site + this service — create the Static Site from the dashboard
-#      (root directory `frontend`, build `npm install && npm run build`,
-#      publish `dist`, rewrite `/*  /index.html  200`) and set on it
-#      VITE_API_BASE=https://shard-relay.onrender.com and
-#      VITE_WS_URL=wss://shard-relay.onrender.com. Then set ALLOWED_ORIGINS
-#      below to that static site's origin.
+#   B) this service alone, serving the client too
+#      Switch the runtime to Docker and add the repository Dockerfile: the image
+#      compiles the SPA and serves it from the same process (SHARD_STATIC), so
+#      client, /api and /ws share one origin and no VITE_* variables are needed.
+#
+# Note on rootDir: it scopes Render's auto-deploy to backend/. Frontend-only
+# commits will not redeploy the relay — in topology A that is what you want,
+# since the static site redeploys on its own.
 services:
   - type: web
     name: shard-relay
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: starter # 512 MB — see MaxRooms / MaxConns in backend/internal/room
+    runtime: go
+    rootDir: backend
+    # The Go module root holds no .go files itself (they live in cmd/ and
+    # internal/), so the package must be named explicitly.
+    buildCommand: go build -tags netgo -ldflags '-s -w' -o app ./cmd/server
+    startCommand: ./app
+    plan: starter # 512 MB — see MaxRooms / MaxConns in internal/room
     region: oregon
     healthCheckPath: /healthz
     # Render sends SIGTERM before a restart/redeploy; the server burns every
@@ -33,13 +41,10 @@ services:
       # first, so the relay always binds where the platform expects.
       - key: PORT
         sync: false
-      # Only used by topology A, where this process also serves the SPA.
-      - key: SHARD_STATIC
-        value: /app/frontend/dist
       # Browser origins allowed to open a relay socket. Strict allow-list:
       # anything else is rejected with 403 before the upgrade, and an
-      # Origin-less handshake is refused outright. For topology A put your own
-      # domain here; for topology B put the static site's origin.
+      # Origin-less handshake is refused outright. For topology A put the static
+      # site's origin here; for topology B put your own domain.
       - key: ALLOWED_ORIGINS
         sync: false
       # How long a one-peer room waits for its partner to come back before the
