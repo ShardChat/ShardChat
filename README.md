@@ -121,6 +121,7 @@ A third connection attempt is refused by the relay with `403` before the WebSock
 | Calls               | P2P audio/video on a native `RTCPeerConnection`; signaling over our own blind relay; screen sharing; camera switching; minimized floating call window |
 | Session             | TTL of 30 minutes, 2 hours, or 24 hours; manual burn button; live countdown                             |
 | Client              | Light and dark themes; no accounts, no phone numbers, no e-mail                                          |
+| Installable         | Web app manifest: installs as a standalone app on Android, iOS and desktop, with a `New session` shortcut |
 
 ## 6. File Security Pipeline
 
@@ -157,7 +158,8 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 │   ├── internal/ws/              # WebSocket handler, packet protocol, 2-peer gate
 ├── frontend/
 │   ├── .env.example              # documented VITE_* build-time overrides
-│   ├── public/                   # favicon, logo, robots.txt
+│   ├── public/                   # favicon, logo, manifest.webmanifest, icon-*.png, robots.txt
+│   ├── scripts/                  # csp-hash.mjs, make-icons.mjs (maintenance tools)
 │   └── src/
 │       ├── components/           # Navbar, CrystalLogo, ThemeToggle
 │       ├── components/chat/      # Room, ChatHeader, MessageList, InputBar, CallStage, ...
@@ -268,6 +270,24 @@ Root directory `backend` also scopes auto-deploy to `backend/` — frontend-only
 | Environment       | `ALLOWED_ORIGINS` = your own domain                 |
 
 `ALLOWED_ORIGINS` is a strict allow-list and gates both the CORS preflight for `POST /api/rooms` and the WebSocket `Origin` check. Leave it unset and the relay stays in dev mode: loopback origins only, with a startup warning.
+
+### Installable app (PWA)
+
+`frontend/public/manifest.webmanifest` makes SHARD installable from the browser on Android, iOS and desktop: standalone display, no address bar, its own launcher icon and splash colour. Chrome offers *Install app* once the page has been visited and shows engagement; iOS uses **Share → Add to Home Screen**.
+
+| Piece                             | Role                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.webmanifest`            | `id`/`start_url`/`scope` at `/`, `display: standalone`, theme `#09090b`, the icon set, and a `New session` shortcut to `/new`    |
+| `icon-192.png`, `icon-512.png`    | `purpose: "any"` — the logo as drawn, straight from the master `logo.png`                                                        |
+| `maskable-192.png`, `-512.png`    | `purpose: "maskable"` — full-bleed so the OS can crop it; mark inset to 75% of the canvas                                       |
+| `apple-touch-icon.png`            | iOS ignores the manifest for home-screen installs; it takes this 180×180 PNG and rounds it itself                               |
+
+Every icon is derived from `logo.png` by `frontend/scripts/make-icons.mjs` rather than hand-exported, so the brand mark has exactly one source. `--inspect` reports the mark's bounding box. Regenerate with `node scripts/make-icons.mjs` after replacing the logo. The output is committed, not built: installability must not depend on a code generator running.
+
+Two details are load-bearing rather than cosmetic:
+
+- **The manifest must be served as `application/manifest+json`.** Go's MIME table has no `.webmanifest` entry, so `http.ServeFile` sniffs the bytes and answers `text/plain` — and since `SecurityHeaders` sends `X-Content-Type-Options: nosniff`, the browser refuses to parse it and the install prompt silently disappears behind a `200`. `cmd/server/main.go` pins the type with `mime.AddExtensionType`. If you host the bundle anywhere else (Option A's static site, nginx, a CDN), **check that host returns `application/manifest+json` for `/manifest.webmanifest`**, or name the file `manifest.json`, which every host already maps to `application/json`.
+- **There is deliberately no service worker.** Chrome's install criteria no longer require one, so the manifest alone buys the install. A caching worker would sit badly with this project's guarantees: it can pin a stale app shell indefinitely, and any future runtime caching rule touching `/api` or `/ws` would persist sealed session traffic — exactly what the zero-retention design forbids. Offline support, if it is ever wanted, should be an explicit, reviewed decision rather than a default.
 
 In-browser cryptographic self-test (key agreement, deterministic fingerprints, GCM round-trips):
 

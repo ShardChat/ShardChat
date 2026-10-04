@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -234,6 +235,15 @@ func main() {
 
 	// SPA static assets from frontend/dist (same process, same origin —
 	// the browser sees one deployable service on Render).
+	//
+	// Go's built-in MIME table has no .webmanifest entry, so http.ServeFile
+	// falls back to sniffing the manifest's bytes and labels them text/plain.
+	// SecurityHeaders sends X-Content-Type-Options: nosniff, and a browser
+	// told "this is text/plain" will not parse it as a manifest — the install
+	// prompt silently disappears while the link still resolves 200. The web app
+	// manifest spec accepts only application/json and
+	// application/manifest+json, so pin the latter before any file is served.
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
 	staticRoot := envOr("SHARD_STATIC", "../frontend/dist")
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(staticRoot+"/assets"))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {

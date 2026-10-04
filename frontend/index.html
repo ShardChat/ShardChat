@@ -48,8 +48,19 @@
     />
     <meta name="twitter:image" content="https://shardchat.onrender.com/logo.png" />
 
+    <!-- Installable app. The manifest carries start_url/scope/display and the
+         icon set; the two apple-* tags below are what iOS actually reads, since
+         Safari ignores the manifest for home-screen installs entirely.
+         apple-mobile-web-app-title caps the label under the icon — without it
+         iOS falls back to <title> and renders the full "SHARD — Ephemeral
+         Encrypted Sessions" string, truncated mid-word on the home screen.
+         Icons are generated from public/logo.png by scripts/make-icons.mjs. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="SHARD" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="referrer" content="no-referrer" />
     <meta name="robots" content="index, follow" />
     <!-- SHARD crystal favicon; colors follow the browser tab theme. -->
