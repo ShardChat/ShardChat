@@ -337,23 +337,6 @@ No trust in this document is required — every claim below is checkable in unde
 8. Open the same link in a third browser profile. You get a "Session is Full" screen, and the Network tab shows no further `/api` or `/ws` requests: the rejection is terminal, not a retry loop.
 9. Optional: run the in-browser cryptographic self-test from the console (see section 9). It validates ECDH agreement, fingerprint determinism, and AES-GCM round-trips against the browser's own Web Crypto implementation.
 
-## 12. Donations
-
-SHARD takes no investment and shows no advertising. Donations cover relay hosting, TURN bandwidth, and domain costs.
-
-The crypto terminal at `/donate` accepts:
-
-| Asset          | Network              | Address                                    |
-| -------------- | -------------------- | ------------------------------------------ |
-| USDT           | TRON (TRC-20)        | `TLvXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`     |
-| Litecoin (LTC) | Litecoin Native      | `ltc1qXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
-| Bitcoin (BTC)  | Bitcoin Mainnet      | `bc1qXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
-| TRX            | TRON (TRC-20)        | `TXkXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`     |
-
-Addresses above are placeholders — the live values are served at `/donate` and maintained in `frontend/src/config/donate.ts`. Send only the stated asset on the stated network.
-
-Non-financial support — a GitHub star, or sharing SHARD with someone who needs it — helps just as much.
-
 ## 13. License
 
 SHARD is free software: licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-only)**.
