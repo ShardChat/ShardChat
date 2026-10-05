@@ -33,6 +33,7 @@ import type {
 } from "../types/protocol";
 import type { ChatMessage, MessageBody, PollBody, TransferState } from "../types/chat";
 import { isValidId, randomId } from "../lib/utils";
+import { playReceiveSound, playSendSound } from "../lib/audioBus";
 
 export type SessionPhase =
   | "connecting" // WS not open yet
@@ -153,6 +154,9 @@ export function useChatSession(roomId: string): UseChatSessionResult {
   const burnReasonRef = useRef<BurnReason | null>(null);
   /** True when THIS tab sent the BURN_ROOM (self burn → "manual"). */
   const selfBurnedRef = useRef(false);
+  /** Id of the last message that played the receive chime. Guards against the
+   *  reconnect path re-delivering an id we have already rung for. */
+  const lastRungRef = useRef<string | null>(null);
   /** TTL deadline mirror: the WS-packet closure is registered once at mount,
    *  so it must read the deadline through a ref, not a stale state closure. */
   const expiresAtRef = useRef<number | null>(null);
@@ -500,6 +504,8 @@ export function useChatSession(roomId: string): UseChatSessionResult {
                 },
               ]);
               setTransfers((prev) => prev.filter((t) => t.progress < 1));
+              // A finished download is an incoming file message - chime once.
+              playReceiveSound();
             },
           });
           break;
@@ -626,6 +632,15 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           },
         ];
       });
+      // Ring once for a message that genuinely ARRIVED. Self-echoes are our
+      // own message coming back from the relay and must stay silent; the id
+      // guard swallows the duplicate the reconnect path re-delivers. Played
+      // here rather than inside the updater because StrictMode may run an
+      // updater twice, and a double chime on every message is worse than none.
+      if (!isSelfEcho && lastRungRef.current !== p.id) {
+        lastRungRef.current = p.id;
+        playReceiveSound();
+      }
     } catch {
     // Undecryptable: wrong key or corrupted frame - drop silently.
     }
@@ -649,6 +664,7 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           ...prev,
           { id, sender: "self", body, timestamp: packet.timestamp, receipt: "sent", reactions: new Map() },
         ]);
+        playSendSound();
       }
       return ok;
     },
@@ -729,6 +745,9 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           setTransfers((prev) => prev.map((t) => (t.fileId === fileId ? { ...t, progress } : t))),
         onDone: () => {
           setTransfers((prev) => prev.filter((t) => t.fileId !== fileId));
+          // Files bypass encryptAndSend, so this is where their send tick
+          // belongs: onDone means every chunk left, i.e. it really went out.
+          playSendSound();
           setMessages((prev) => [
             ...prev,
             {
@@ -786,6 +805,9 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           setTransfers((prev) => prev.map((t) => (t.fileId === fileId ? { ...t, progress } : t))),
         onDone: () => {
           setTransfers((prev) => prev.filter((t) => t.fileId !== fileId));
+          // Files bypass encryptAndSend, so this is where their send tick
+          // belongs: onDone means every chunk left, i.e. it really went out.
+          playSendSound();
           setMessages((prev) => [
             ...prev,
             {

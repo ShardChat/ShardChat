@@ -190,9 +190,39 @@ export function InputBar({
   // gray as picked ones (through the security gate) instead of going out instantly.
   useEffect(() => {
     registerAddToQueue?.((files: File[]) => {
-      handleFiles(files);
+      handleFiles(files, { viewOnce: false });
     });
   }, [registerAddToQueue]);
+
+  // Paste anywhere in the room. A clipboard screenshot (Ctrl/Cmd+V after the
+  // OS grab, or a "Copy image" in another app) arrives as a file item rather
+  // than text, so it is intercepted here and enqueued with the same preview
+  // and [x] as a picked photo. The listener reads the LATEST handleFiles
+  // through a ref so a re-render mid-session cannot leave it calling a stale
+  // closure with a stale onSecurityNotice.
+  const handleFilesRef = useRef(handleFiles);
+  handleFilesRef.current = handleFiles;
+
+  useEffect(() => {
+    if (disabled) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (const item of items) {
+        if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+      // No image in the clipboard: let the browser paste text normally.
+      if (files.length === 0) return;
+      e.preventDefault();
+      handleFilesRef.current(files, { viewOnce: false });
+      taRef.current?.focus();
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [disabled]);
 
   // "+" menu: close on outside click / Escape.
   useEffect(() => {
@@ -249,10 +279,16 @@ export function InputBar({
     fileRef.current?.click();
   }
 
-  /** Files picked via the hidden input: every file passes the quiet    *  security gate (blocklist / magic bytes / zip scan / 25 MB) BEFORE
-   *  enqueueing; rejections surface as a short toast, not scary badges. */
-  function handleFiles(files: File[]) {
-    const once = pickIntentRef.current === "once" && files.length === 1;
+  /** Files picked via the hidden input, dropped, or pasted from the
+   *  clipboard: every file passes the quiet security gate (blocklist / magic
+   *  bytes / zip scan / 25 MB) BEFORE enqueueing; rejections surface as a
+   *  short toast, not scary badges.
+   *
+   *  `viewOnce` is explicit for the non-picker routes. They must NOT inherit
+   *  pickIntentRef: a screenshot pasted right after choosing "view-once
+   *  photo" would otherwise silently burn after 10 seconds. */
+  function handleFiles(files: File[], opts?: { viewOnce?: boolean }) {
+    const once = opts?.viewOnce ?? (pickIntentRef.current === "once" && files.length === 1);
     const capacity = Math.max(0, MAX_QUEUE - queueRef.current.length);
     const fitting = files.slice(0, capacity);
     files.slice(capacity).forEach(() => onSecurityNotice?.("Queue holds at most 10 files"));

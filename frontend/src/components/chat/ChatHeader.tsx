@@ -3,7 +3,7 @@
 // dock, when search is open. Right: a slim controls capsule - call, video,
 // search toggle and a "⋯" menu holding countdown, safety fingerprint, burn.
 import { useEffect, useRef, useState } from "react";
-import { Flame, MoreVertical, Phone, Search, ShieldCheck, Video } from "lucide-react";
+import { Flame, MoreVertical, Phone, Search, ShieldCheck, Video, Volume2, VolumeX } from "lucide-react";
 import { formatCountdown } from "../../lib/utils";
 import type { SessionPhase } from "../../hooks/useChatSession";
 import { SearchBar } from "./SearchBar";
@@ -29,6 +29,9 @@ interface ChatHeaderProps {
   inCall: boolean;
   onAudioCall: () => void;
   onVideoCall: () => void;
+  /** UI sound effects (sent / received / ringing) are synthesized, see lib/audioBus. */
+  soundEnabled: boolean;
+  onToggleSound: () => void;
 }
 
 // Same look as the dock's round icon buttons (single visual language).
@@ -83,6 +86,8 @@ export function ChatHeader({
   inCall,
   onAudioCall,
   onVideoCall,
+  soundEnabled,
+  onToggleSound,
 }: ChatHeaderProps) {
   const [kebabOpen, setKebabOpen] = useState(false);
   const [msLeft, setMsLeft] = useState<number | null>(null);
@@ -160,6 +165,16 @@ export function ChatHeader({
           className={iconBtn}
         >
           <Video className="h-4 w-4" aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={onToggleSound}
+          aria-label={soundEnabled ? "Mute sounds" : "Unmute sounds"}
+          aria-pressed={soundEnabled}
+          title={soundEnabled ? "Sounds on" : "Sounds off"}
+          className={soundEnabled ? iconBtn : `${iconBtn} text-tertiary/60`}
+        >
+          {soundEnabled ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}
         </button>
         <button
           type="button"

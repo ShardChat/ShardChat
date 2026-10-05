@@ -8,12 +8,15 @@ import type { ChatMessage } from "../../types/chat";
 import { formatBytes } from "../../lib/fileSecurity";
 import { useWebRTCCall } from "../../hooks/useWebRTCCall";
 import { useKeyboardInset } from "../../hooks/useKeyboardInset";
+import { useSound } from "../../hooks/useSound";
+import { playCallTone, stopCallTone } from "../../lib/audioBus";
 import { CallStage } from "./CallStage";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { InputBar } from "./InputBar";
 import { MediaViewer } from "./MediaViewer";
 import { PinnedBar } from "./PinnedBar";
+import { ShortcutsModal } from "./ShortcutsModal";
 import Navbar from "../Navbar";
 import Footer from "../Footer";
 import { navigate } from "../../App";
@@ -56,6 +59,7 @@ export function Room({ roomId, onExit }: RoomProps) {
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [hitIndex, setHitIndex] = useState(0);
@@ -67,6 +71,7 @@ export function Room({ roomId, onExit }: RoomProps) {
   const securityNotice = s.securityNotice;
   /** InputBar-registered hook: pushes dropped photos into the dock queue. */
   const addToQueueRef = useRef<((files: File[]) => void) | null>(null);
+  const { soundEnabled, toggleSound } = useSound();
 
   // phones: while the on-screen keyboard is open the chat shell shrinks to
   // the visible viewport (100dvh − keyboard), so the composer and the last
@@ -94,6 +99,37 @@ export function Room({ roomId, onExit }: RoomProps) {
   useEffect(() => {
     window.history.replaceState(null, "", `/room/${roomId}`);
   }, [roomId]);
+
+  // "?" opens the shortcut reference (that IS Shift + /, so one check covers
+  // both). Ignored inside a text field: typing "why?" into a message must
+  // never summon a dialog over the composer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "?" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      e.preventDefault();
+      setShortcutsOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Ring while an incoming call waits for the tap to accept, and stop the
+  // moment it is accepted, declined or the call ends — otherwise the tone
+  // would outlive the call it belongs to.
+  useEffect(() => {
+    if (call.phase === "incoming") {
+      playCallTone();
+      return () => stopCallTone();
+    }
+    stopCallTone();
+    return undefined;
+  }, [call.phase]);
+
+  // Leaving the room must not leave a ring running in a tab nobody is
+  // listening to.
+  useEffect(() => () => stopCallTone(), []);
 
 
   const onDrop = useCallback(
@@ -399,6 +435,8 @@ export function Room({ roomId, onExit }: RoomProps) {
           inCall={inCall}
           onAudioCall={() => call.startCall("audio")}
           onVideoCall={() => call.startCall("video")}
+          soundEnabled={soundEnabled}
+          onToggleSound={toggleSound}
         />
 
         {pinned && pinnedText && (
@@ -408,7 +446,7 @@ export function Room({ roomId, onExit }: RoomProps) {
         {dragOver && (
           <div className="pointer-events-none absolute inset-4 z-30 flex items-center justify-center rounded-2xl border-2 border-dashed border-line-strong bg-surface/60 backdrop-blur-sm">
             <p className="text-sm font-medium text-heading">
-              {locked ? "Your peer hasn't joined yet — sending is unavailable" : "Drop to encrypt and send the image"}
+              {locked ? "Your peer hasn't joined yet — sending is unavailable" : "Drop to queue the file for sending"}
             </p>
           </div>
         )}
@@ -489,6 +527,7 @@ export function Room({ roomId, onExit }: RoomProps) {
       </div>
 
       {lightbox && <MediaViewer imageSrc={lightbox} onClose={() => setLightbox(null)} />}
+      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
     </main>
   );
 }
