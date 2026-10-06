@@ -3,7 +3,7 @@
 // dock, when search is open. Right: a slim controls capsule - call, video,
 // search toggle and a "⋯" menu holding countdown, safety fingerprint, burn.
 import { useEffect, useRef, useState } from "react";
-import { Flame, MoreVertical, Phone, Search, ShieldCheck, Video, Volume2, VolumeX } from "lucide-react";
+import { Flame, MoreVertical, PanelLeft, Phone, Search, ShieldCheck, Video, Volume2, VolumeX } from "lucide-react";
 import { formatCountdown } from "../../lib/utils";
 import type { SessionPhase } from "../../hooks/useChatSession";
 import { SearchBar } from "./SearchBar";
@@ -14,6 +14,10 @@ interface ChatHeaderProps {
   expiresAt: number | null;
   /** True until the peer joins and E2EE is up: chat features stay off. */
   actionsLocked: boolean;
+  /** Whether the sessions sidebar is currently shown (desktop rail). */
+  sidebarVisible?: boolean;
+  /** Reveal the sessions sidebar (hidden rail, or the mobile drawer). */
+  onToggleSidebar?: () => void;
   searchOpen: boolean;
   /** Search pill props (rendered between brand and controls when open). */
   searchQuery: string;
@@ -72,6 +76,8 @@ export function ChatHeader({
   fingerprint,
   expiresAt,
   actionsLocked,
+  sidebarVisible = false,
+  onToggleSidebar,
   searchOpen,
   searchQuery,
   searchMatchCount,
@@ -123,6 +129,22 @@ export function ChatHeader({
 
   return (
     <header className="safe-px relative z-20 flex w-full items-center gap-3 pb-1 pt-3">
+      {/* Sessions panel toggle: on desktop it appears only while the rail
+          is hidden; on phones it is always there and opens the drawer. */}
+      {onToggleSidebar && (
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          aria-label="Show sessions panel"
+          title="Sessions (Ctrl+\)"
+          className={`shrink-0 rounded-lg p-1.5 text-tertiary transition-colors duration-150 hover:bg-black/[0.06] hover:text-heading dark:hover:bg-white/10 ${
+            sidebarVisible ? "md:hidden" : "md:flex"
+          }`}
+        >
+          <PanelLeft className="h-4 w-4" aria-hidden />
+        </button>
+      )}
+
       {/* Brand: wordmark + connection status, pinned to the very left edge */}
       <div className="shrink-0 leading-tight">
         <p className="text-[13px] font-semibold tracking-wider text-heading">SHARD</p>

@@ -7,7 +7,7 @@ import SessionSetup from "./pages/SessionSetup";
 import Donate from "./pages/Donate";
 import Security from "./pages/Security";
 import Terms from "./pages/Terms";
-import { Room } from "./components/chat/Room";
+import { RoomHost } from "./components/chat/RoomHost";
 
 export type Route =
   | { name: "landing" }
@@ -54,8 +54,8 @@ export default function App() {
       return <Terms />;
     case "room":
       return (
-        <Room
-          roomId={route.roomId}
+        <RoomHost
+          initialRoomId={route.roomId}
           onExit={() => {
             window.history.pushState(null, "", "/");
             setRoute({ name: "landing" });

@@ -1,9 +1,9 @@
 // SHARD — room workspace. Wires the E2EE session to the chat UI:
 // search, edit mode (↑ to edit last), pinning, polls, view-once media,
 // drag & drop images, reply state, lightbox, destroyed-session screens.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { CircleAlert, Clock, DoorOpen, Flame, LoaderCircle, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
-import { useChatSession, type PurgeStats } from "../../hooks/useChatSession";
+import { useChatSession, type PurgeStats, type SessionPhase } from "../../hooks/useChatSession";
 import type { ChatMessage } from "../../types/chat";
 import { formatBytes } from "../../lib/fileSecurity";
 import { useWebRTCCall } from "../../hooks/useWebRTCCall";
@@ -21,8 +21,26 @@ import Navbar from "../Navbar";
 import Footer from "../Footer";
 import { navigate } from "../../App";
 
+export type RoomHandle = {
+  /** Imperative burn used by the hub's "Burn All" and per-card ×. */
+  burn: () => void;
+};
+
 interface RoomProps {
   roomId: string;
+  /** Stable hub key when the Room lives under the multi-session host.
+   *  Reporting and sidebar callbacks are only wired when present. */
+  sessionId?: string;
+  /** Phase + unread reporting channel up to the hub. */
+  onReport?: (key: string, patch: { phase?: SessionPhase; peerMessage?: boolean }) => void;
+  /** Fired once the session reaches a terminal phase (burned/gone/full). */
+  onDead?: (key: string) => void;
+  /** False for background layers: global listeners and overlays stand down
+   *  so two mounted Rooms never fight over paste, "?" or the URL. */
+  uiActive?: boolean;
+  /** Whether the session sidebar is currently shown (desktop rail). */
+  sidebarVisible?: boolean;
+  onOpenSidebar?: () => void;
   onExit: () => void;
 }
 
@@ -44,7 +62,10 @@ const BURN_CAUSES = [
   { reason: "peer-left", icon: DoorOpen, text: "A participant closed their browser tab." },
 ] as const;
 
-export function Room({ roomId, onExit }: RoomProps) {
+export const Room = forwardRef<RoomHandle, RoomProps>(function Room(
+  { roomId, sessionId, onReport, onDead, uiActive = true, sidebarVisible = false, onOpenSidebar, onExit },
+  ref,
+) {
   const s = useChatSession(roomId);
   const call = useWebRTCCall({
     // Gate on verified: a dead /room/:id link must never spin up TURN fetches,
@@ -73,6 +94,41 @@ export function Room({ roomId, onExit }: RoomProps) {
   const addToQueueRef = useRef<((files: File[]) => void) | null>(null);
   const { soundEnabled, toggleSound } = useSound();
 
+  // Imperative handle for the host: burn = the same path as the header's
+  // burn button (hangup first, then the server-side burn).
+  const burnRef = useRef<() => void>(() => {});
+  burnRef.current = () => {
+    call.hangup();
+    s.burnRoom();
+  };
+  useImperativeHandle(ref, () => ({ burn: () => burnRef.current() }), []);
+
+  // Mirror the live session state up to the hub so the sidebar stays honest
+  // about background sessions: phase dots, expiry, unread counters.
+  const phaseRef = useRef<SessionPhase>(s.phase);
+  phaseRef.current = s.phase;
+  const lastMsgCountRef = useRef(s.messages.length);
+  useEffect(() => {
+    if (!sessionId || !onReport) return;
+    const grew = s.messages.length > lastMsgCountRef.current;
+    lastMsgCountRef.current = s.messages.length;
+    const last = s.messages[s.messages.length - 1];
+    onReport(sessionId, {
+      phase: s.phase,
+      peerMessage: Boolean(grew && last && last.sender === "peer" && s.phase === "secure"),
+    });
+  }, [sessionId, onReport, s.phase, s.messages]);
+
+  // Terminal phases remove the session from the hub (the host unmounts this
+  // Room); a standalone Room just ignores it.
+  const deadRef = useRef(onDead);
+  deadRef.current = onDead;
+  useEffect(() => {
+    if (sessionId && onDead && (s.phase === "burned" || s.phase === "gone" || s.phase === "room_full")) {
+      deadRef.current?.(sessionId);
+    }
+  }, [sessionId, onDead, s.phase]);
+
   // phones: while the on-screen keyboard is open the chat shell shrinks to
   // the visible viewport (100dvh − keyboard), so the composer and the last
   // messages stay above the keyboard — standard messenger behavior. On
@@ -82,7 +138,10 @@ export function Room({ roomId, onExit }: RoomProps) {
   // UX guard: the session is memory-only, so a refresh
   // or tab close destroys it forever. The listener is removed on the
   // graceful path (Burn to destroyed screen to exit) via the phase condition.
+  // Under the multi-session host the guard is owned by RoomHost (it covers
+  // every parallel session in one dialog), so standalone Rooms only.
   useEffect(() => {
+    if (!uiActive) return; // the host guards once for all layers
     if (!s.verified) return; // nothing to protect before the room exists
     if (s.phase === "burned" || s.phase === "gone") return;
     const guard = (e: BeforeUnloadEvent) => {
@@ -93,17 +152,22 @@ export function Room({ roomId, onExit }: RoomProps) {
     };
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [s.phase]);
+  }, [s.phase, uiActive]);
 
   // Zero-trace hygiene: strip any stray query/hash from the address bar.
+  // Only the active layer may own the URL — two Rooms would otherwise fight
+  // over replaceState on every render.
   useEffect(() => {
+    if (!uiActive) return;
     window.history.replaceState(null, "", `/room/${roomId}`);
-  }, [roomId]);
+  }, [roomId, uiActive]);
 
   // "?" opens the shortcut reference (that IS Shift + /, so one check covers
   // both). Ignored inside a text field: typing "why?" into a message must
-  // never summon a dialog over the composer.
+  // never summon a dialog over the composer. Stand-down when inactive: a
+  // background layer must never pop a dialog over the visible one.
   useEffect(() => {
+    if (!uiActive) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "?" || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
@@ -113,7 +177,7 @@ export function Room({ roomId, onExit }: RoomProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [uiActive]);
 
   // Ring while an incoming call waits for the tap to accept, and stop the
   // moment it is accepted, declined or the call ends — otherwise the tone
@@ -255,12 +319,11 @@ export function Room({ roomId, onExit }: RoomProps) {
     );
   }
 
-  // burned OR dead link: one calm "security guarantee" screen instead of a
-  // are 404. It has PRIORITY over the verified-gate below: for a dead room
-  // `verified` never becomes true, so gating on it first would leave the
-  // visitor on a blank page forever. The room is unrecoverable either way -
-  // the card explains why (timer / manual burn / closed tabs).
+  // Terminal screen for a standalone Room (no host): every parallel session
+  // burns independently, so the hub already removed this layer — this full-
+  // screen branch only runs when the Room mounts outside RoomHost.
   if (s.phase === "gone" || s.phase === "burned") {
+    if (sessionId) return null; // hub removes the layer; no full-screen flash
     return (
       <div className="page-bg relative flex min-h-full flex-col transition-colors duration-200">
         {/* Fading dot grid: same canvas as the landing, brand continuity. */}
@@ -385,18 +448,15 @@ export function Room({ roomId, onExit }: RoomProps) {
 
   return (
     <main
-      className="page-bg relative flex h-full flex-col transition-colors duration-200"
+      className="page-bg relative flex h-full flex-row transition-colors duration-200"
       style={
         keyboardActive && keyboardInset > 0
           ? { height: `calc(100dvh - ${keyboardInset}px)` }
           : undefined
       }
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={onDrop}
+      onDragOver={uiActive ? (e) => { e.preventDefault(); setDragOver(true); } : undefined}
+      onDragLeave={uiActive ? () => setDragOver(false) : undefined}
+      onDrop={uiActive ? onDrop : undefined}
     >
       <CallStage {...call} />
 
@@ -406,6 +466,8 @@ export function Room({ roomId, onExit }: RoomProps) {
           fingerprint={s.fingerprint}
           expiresAt={s.expiresAt}
           actionsLocked={locked}
+          sidebarVisible={sidebarVisible}
+          onToggleSidebar={onOpenSidebar}
           searchOpen={searchOpen}
           searchQuery={search}
           searchMatchCount={hits.length}
@@ -493,6 +555,7 @@ export function Room({ roomId, onExit }: RoomProps) {
 
         <InputBar
           disabled={locked}
+          capturePaste={uiActive}
           replyTo={replyTo}
           editing={editing}
           onPanelsOpenChange={setInputPanelsOpen}
@@ -526,8 +589,8 @@ export function Room({ roomId, onExit }: RoomProps) {
         />
       </div>
 
-      {lightbox && <MediaViewer imageSrc={lightbox} onClose={() => setLightbox(null)} />}
-      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+      {lightbox && uiActive && <MediaViewer imageSrc={lightbox} onClose={() => setLightbox(null)} />}
+      {shortcutsOpen && uiActive && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
     </main>
   );
-}
+});

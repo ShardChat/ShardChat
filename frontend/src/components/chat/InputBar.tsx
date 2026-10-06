@@ -36,6 +36,9 @@ interface InputBarProps {
   onPanelsOpenChange?: (open: boolean) => void;
   /** Hands the parent a hook to push dropped photos straight into the queue. */
   registerAddToQueue?: (fn: (files: File[]) => void) => void;
+  /** False in background layers of the multi-session host: the window-level
+   *  paste listener must belong to the visible room only. */
+  capturePaste?: boolean;
 }
 
 const MAX_ROWS = 5;
@@ -125,6 +128,7 @@ export function InputBar({
   onEditLast,
   onPanelsOpenChange,
   registerAddToQueue,
+  capturePaste,
 }: InputBarProps) {
   const [text, setText] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -204,7 +208,7 @@ export function InputBar({
   handleFilesRef.current = handleFiles;
 
   useEffect(() => {
-    if (disabled) return;
+    if (disabled || capturePaste === false) return;
     const onPaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -222,7 +226,7 @@ export function InputBar({
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [disabled]);
+  }, [disabled, capturePaste]);
 
   // "+" menu: close on outside click / Escape.
   useEffect(() => {

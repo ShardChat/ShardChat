@@ -19,6 +19,7 @@ const SHORTCUTS: Array<{ keys: string[]; label: string }> = [
   { keys: ["↑"], label: "Edit last message" },
   { keys: ["Esc"], label: "Cancel reply / close this" },
   { keys: [IS_APPLE ? "⌘" : "Ctrl", "V"], label: "Paste screenshot" },
+  { keys: [IS_APPLE ? "⌘" : "Ctrl", "\\"], label: "Hide / show sessions" },
   { keys: ["?"], label: "Open this dialog" },
 ];
 
