@@ -1,7 +1,7 @@
 // SHARD — one message bubble: theme-aware zinc bubbles, reply quotes,
 // over actions with inline quick-reactions, markdown rendering, polls,
 // view-once media, ticks and search highlighting.
-import { useRef } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { CornerUpLeft, Flame, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import type { ChatMessage } from "../../types/chat";
 import { formatTime } from "../../lib/utils";
@@ -19,6 +19,11 @@ const actionBtn =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-secondary transition-all duration-150 hover:bg-black/[0.08] hover:text-heading active:scale-90 dark:hover:bg-white/10";
 const actionBtnDanger =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-secondary transition-all duration-150 hover:bg-red-500/10 hover:text-red-600 active:scale-90 dark:hover:text-red-400";
+// Touch action bar: 36px targets (hover column stays 28px), no hover styles.
+const actionBtnTouch =
+  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary active:scale-90";
+const actionBtnDangerTouch =
+  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-red-500/90 active:scale-90 dark:text-red-400/90";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -54,6 +59,46 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const mine = m.sender === "self";
 
+  // Touch devices have no hover, so the reply/react/edit column can't be
+  // hover-revealed there: a tap on the message toggles a compact action
+  // bar under the bubble instead (desktop keeps the hover column).
+  const [isTouch] = useState(
+    () => typeof window !== "undefined" && window.matchMedia?.("(hover: none)").matches === true,
+  );
+  const [menuOpen, setMenuOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // tap outside the row (or Esc) closes the touch action bar
+  useEffect(() => {
+    if (!menuOpen || !isTouch) return;
+    const close = (e: PointerEvent) => {
+      if (rowRef.current && !rowRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen, isTouch]);
+
+  // wrap an action so the touch bar closes right after it runs
+  const withClose = (fn: () => void) => () => {
+    fn();
+    setMenuOpen(false);
+  };
+
+  // A tap on the message itself toggles the touch bar; taps on inner
+  // buttons/links (images, poll options, quotes) keep their own behavior.
+  const onRowClick = (e: ReactMouseEvent) => {
+    if (!isTouch) return;
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
+    setMenuOpen((v) => !v);
+  };
+
   // bubbles: raised graphite for self / deep graphite for peer in dark;
   // soft near-white for self / pure white for peer in light. A soft shadow
   // + faint ring give both tones quiet depth without shouting.
@@ -80,20 +125,18 @@ export function MessageBubble({
   const canEdit = mine && m.body.kind === "text";
   const canPin = m.body.kind === "text" || m.body.kind === "poll";
 
-  // (Reaction quick-bar needs no outside-click handling: it lives and dies
-  // with the row hover, so there is no open state to manage.)
-  const reactWrapRef = useRef<HTMLDivElement>(null);
-
   return (
     <div
+      ref={rowRef}
       id={`msg-${m.id}`}
+      onClick={onRowClick}
       className={`group flex items-center transition-opacity ${mine ? "justify-end" : "justify-start"}${highlightTone}`}
     >
       {/* Hover actions sit right NEXT to the bubble (Telegram-style):
           to the LEFT of self bubbles, to the RIGHT of peer bubbles.
           Quick reactions show inline — no extra smile-button step. */}
-      {mine && (
-        <div ref={reactWrapRef} className="touch-visible flex shrink-0 flex-col items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+      {mine && !isTouch && (
+        <div className="flex shrink-0 flex-col items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <div className="card shadow-pop flex gap-1 rounded-full px-2 py-1">
             {REACTIONS.map((emoji) => (
               <button
@@ -152,7 +195,7 @@ export function MessageBubble({
         </div>
       )}
 
-      <div className="relative flex min-w-0 max-w-[80%] flex-col">
+      <div className={`relative flex min-w-0 flex-col ${m.body.kind === "poll" ? "max-w-[88%] sm:max-w-[80%]" : "max-w-[80%]"}`}>
         {/* Media bubbles (attachment cards / voice notes) carry their own
             compact surfaces — no extra chrome, timestamp lives inside. */}
         {isMediaBubble ? (
@@ -295,11 +338,63 @@ export function MessageBubble({
             ))}
           </div>
         )}
+
+        {/* Touch: tap-to-reveal action bar (replaces the hover column). */}
+        {isTouch && menuOpen && (
+          <div
+            className={`card shadow-pop mt-1 flex w-fit max-w-full flex-wrap items-center gap-x-1 gap-y-1 rounded-2xl px-2 py-1.5 ${mine ? "self-end" : "self-start"}`}
+          >
+            <div className="flex gap-0.5">
+              {REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className="p-1 text-lg leading-none active:scale-125"
+                  onClick={withClose(() => onReact(m.id, emoji))}
+                  aria-label={`React ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <span className="mx-0.5 h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden />
+            <button type="button" onClick={withClose(() => onReply(m))} aria-label="Reply" title="Reply" className={actionBtnTouch}>
+              <CornerUpLeft className="h-4 w-4" aria-hidden />
+            </button>
+            {canEdit && (
+              <button
+                type="button"
+                onClick={withClose(() => onEdit(m.id, m.body.kind === "text" ? m.body.text : ""))}
+                aria-label="Edit"
+                title="Edit"
+                className={actionBtnTouch}
+              >
+                <Pencil className="h-4 w-4" aria-hidden />
+              </button>
+            )}
+            {canPin && (
+              <button type="button" onClick={withClose(() => onPin(m.id))} aria-label="Pin" title="Pin" className={actionBtnTouch}>
+                <Pin className="h-4 w-4" aria-hidden />
+              </button>
+            )}
+            {mine && (
+              <button
+                type="button"
+                onClick={withClose(() => onDelete(m.id))}
+                aria-label="Delete for everyone"
+                title="Delete for everyone"
+                className={actionBtnDangerTouch}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Peer actions: outside on the RIGHT, mirrored to self's left side. */}
-      {!mine && (
-        <div ref={reactWrapRef} className="touch-visible flex shrink-0 flex-col items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+      {!mine && !isTouch && (
+        <div className="flex shrink-0 flex-col items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <div className="card shadow-pop flex gap-1 rounded-full px-2 py-1">
             {REACTIONS.map((emoji) => (
               <button
