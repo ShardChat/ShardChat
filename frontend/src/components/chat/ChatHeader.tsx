@@ -1,7 +1,7 @@
-// SHARD — floating top row. Left: SHARD wordmark with the connection status
-// beneath it (no logo tile). Middle: the search pill, styled like the input
-// dock, when search is open. Right: a slim controls capsule - call, video,
-// search toggle and a "⋯" menu holding countdown, safety fingerprint, burn.
+// SHARD — floating top row. Left: the connection status line (no wordmark).
+// Middle: the search pill, styled like the input dock, when search is open.
+// Right: a slim controls capsule - call, video, search toggle and a "⋯" menu
+// holding countdown, safety fingerprint, burn.
 import { useEffect, useRef, useState } from "react";
 import { Flame, MoreVertical, PanelLeft, Phone, Search, ShieldCheck, Video, Volume2, VolumeX } from "lucide-react";
 import { formatCountdown } from "../../lib/utils";
@@ -145,12 +145,9 @@ export function ChatHeader({
         </button>
       )}
 
-      {/* Brand: wordmark + connection status, pinned to the very left edge */}
+      {/* Brand: connection status only, pinned to the very left edge */}
       <div className="shrink-0 leading-tight">
-        <p className="text-[13px] font-semibold tracking-wider text-heading">SHARD</p>
-        <div className="mt-0.5">
-          <StatusLine phase={phase} />
-        </div>
+        <StatusLine phase={phase} />
       </div>
 
       {/* Middle: the search pill takes the remaining width when open */}
