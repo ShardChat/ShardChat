@@ -3,13 +3,13 @@
 // tools are tucked into a compact "+" menu, emoji lives inside the pill,
 // mic/send occupy the right end — one calm row instead of a button strip.
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, Flame, Pencil, Paperclip, Plus, Reply, Send, Smile, X } from "lucide-react";
+import { BarChart3, Flame, Mic, Pencil, Paperclip, Plus, Reply, Send, Smile, Square, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "../../types/chat";
 import { randomId } from "../../lib/utils";
 import { checkFile } from "../../lib/fileSecurity";
 import { categorize } from "./FileMessageCard";
 import { EmojiPicker } from "./EmojiPicker";
-import { VoiceRecorder } from "./VoiceRecorder";
+import { useVoiceRecord } from "../../hooks/useVoiceRecord";
 import { useKeyboardInset } from "../../hooks/useKeyboardInset";
 
 interface InputBarProps {
@@ -148,6 +148,15 @@ export function InputBar({
   queueRef.current = queue;
 
   const isEditing = !!editing;
+
+  // Voice notes: the hook lives here (not in a child button) so that while
+  // recording the whole dock row can be swapped for one full-width bar. The
+  // old in-cluster waveform overflowed the screen edge on phones and
+  // squeezed the message pill away — the recording bar can't: its wave is
+  // the only flexible element and everything else is a fixed 36px control.
+  const { state: recState, liveWave, start: startRec, stop: stopRec, cancel: cancelRec } =
+    useVoiceRecord({ onLimit: (r) => onSendAudio(r) });
+  const recording = recState === "recording";
 
   // On phones the on-screen keyboard must never cover the composer: the
   // dock lifts itself by the measured keyboard height (mainstream-
@@ -514,9 +523,43 @@ export function InputBar({
           </div>
         )}
 
-        {/* The dock row: tools menu · input pill · voice / send.
+        {/* While recording the dock row is replaced by one full-width
+            recording bar: trash · REC · live wave · stop. */}
+        {recording ? (
+          <div className="well flex items-center gap-1.5 rounded-3xl p-1.5">
+            <button
+              type="button"
+              onClick={cancelRec}
+              aria-label="Cancel recording"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-tertiary transition-all duration-150 hover:bg-black/[0.06] hover:text-heading active:scale-90 dark:hover:bg-white/10"
+            >
+              <Trash2 className="h-5 w-5" aria-hidden />
+            </button>
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /> REC
+            </span>
+            <div className="flex h-8 min-w-0 flex-1 items-end justify-end gap-[2px] overflow-hidden" aria-hidden>
+              {liveWave.map((v, i) => (
+                <span
+                  key={i}
+                  className="w-[3px] shrink-0 rounded-full bg-zinc-500"
+                  style={{ height: `${Math.max(12, v * 100)}%` }}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => void stopRec().then((r) => r && onSendAudio(r))}
+              aria-label="Stop and send"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white shadow-card transition-all duration-150 hover:bg-zinc-800 active:scale-90 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+            >
+              <Square className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+        ) : (
+        /* The dock row: tools menu · input pill · voice / send.
             h-9 icons + h-9 send inside a self-center wrapper keep every
-            control optically centered against the 1-row pill. */}
+            control optically centered against the 1-row pill. */
         <div className="flex items-end gap-2">
           <div ref={plusWrapRef} className="relative shrink-0 self-center">
             {plusOpen && (
@@ -629,7 +672,18 @@ export function InputBar({
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5 self-center">
-            {!text.trim() && !isEditing && queue.length === 0 && <VoiceRecorder onSend={onSendAudio} disabled={disabled} />}
+            {!text.trim() && !isEditing && queue.length === 0 && (
+              <button
+                type="button"
+                onClick={() => void startRec()}
+                disabled={disabled || recState === "processing"}
+                aria-label="Record a voice message"
+                title={disabled ? "Recording unlocks when your peer joins" : "Record a voice message"}
+                className={iconBtn}
+              >
+                <Mic className="h-5 w-5" aria-hidden />
+              </button>
+            )}
 
             {(text.trim() || isEditing || queue.length > 0) && (
               <button
@@ -644,6 +698,7 @@ export function InputBar({
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );
