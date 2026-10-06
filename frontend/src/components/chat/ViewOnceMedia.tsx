@@ -55,6 +55,7 @@ export function ViewOnceMedia({ src, alt, burned, onOpen, onBurn }: ViewOnceMedi
           setRevealed(true);
           onOpen();
         }}
+        data-view-once
         className="group relative block h-40 w-56 overflow-hidden rounded-lg border border-line"
         aria-label="View the photo (burns after viewing)"
       >

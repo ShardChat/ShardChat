@@ -157,12 +157,17 @@ function VideoCard({
   size,
   caption,
   time,
+  mediaTap = false,
 }: {
   url: string;
   name: string;
   size: number;
   caption?: string;
   time: string;
+  /** Touch: suppress the tap-to-play/open gestures on the video surface so
+   *  the row tap opens the message action bar; play still works via the
+   *  explicit play button (and inside fullscreen). */
+  mediaTap?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -175,6 +180,7 @@ function VideoCard({
   const toggle = () => {
     const v = videoRef.current;
     if (!v) return;
+    if (mediaTap && !full) return; // touch: tap-to-play stays on the play button
     if (v.paused) {
       claimAudio(v);
       void v.play();
@@ -237,6 +243,7 @@ function VideoCard({
       <div style={{ height: full ? 256 : 0 }} aria-hidden />
       <div
         ref={wrapRef}
+        data-media-tap={mediaTap && !full ? true : undefined}
         style={full ? { paddingTop: "env(safe-area-inset-top)" } : undefined}
         className={
           full
@@ -267,7 +274,8 @@ function VideoCard({
           onLoadedMetadata={(e) => setDur(e.currentTarget.duration)}
         />
 
-        {/* Center play affordance while idle */}
+        {/* Center play affordance while idle — a real button so the action
+            bar tap rule stays intact on touch devices. */}
         {!playing && (
           <button
             type="button"
@@ -521,6 +529,7 @@ function DocCard({
 export function FileMessageCard({
   url,
   name,
+  mediaTap = false,
   mime,
   size,
   caption,
@@ -536,11 +545,14 @@ export function FileMessageCard({
   mine: boolean;
   /** Kept for API compat: the bubbles now carry their own surfaces. */
   flush?: boolean;
+  /** Touch devices: suppress direct open so the row tap shows the action
+   *  bar first; playback still works via the card's own play button. */
+  mediaTap?: boolean;
 }) {
   void mine;
   const category = categorize(name, mime);
   if (category === "video") {
-    return <VideoCard url={url} name={name} size={size} caption={caption} time={time} />;
+    return <VideoCard url={url} name={name} size={size} caption={caption} time={time} mediaTap={mediaTap} />;
   }
   if (category === "audio") {
     return <AudioCard url={url} name={name} size={size} caption={caption} time={time} />;

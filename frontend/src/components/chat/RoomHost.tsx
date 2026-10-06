@@ -4,7 +4,7 @@
 // WebSocket, E2EE keys and message history alive in React memory — nothing
 // ever touches localStorage. Switching a session is an instant layer flip.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { AlertTriangle, Flame, LoaderCircle } from "lucide-react";
 import { navigate } from "../../App";
 import { createRoom } from "../../lib/sessionHub";
 import { useSessionHub } from "../../hooks/useSessionHub";
@@ -73,6 +73,9 @@ export function RoomHost({ initialRoomId, onExit }: { initialRoomId: string; onE
     [hub],
   );
 
+  // Mass burn asks first: the sidebar button only opens this window, the
+  // real burn happens after Confirm (or the dialog is dismissed).
+  const [burnAllOpen, setBurnAllOpen] = useState(false);
   const burnAll = useCallback(() => {
     handles.current.forEach((h) => h.burn());
     handles.current.clear();
@@ -116,7 +119,7 @@ export function RoomHost({ initialRoomId, onExit }: { initialRoomId: string; onE
             onClearCreateError={() => setCreateError(null)}
             onActivate={hub.activate}
             onBurnOne={burnOne}
-            onBurnAll={burnAll}
+            onBurnAll={() => setBurnAllOpen(true)}
             onNavigate={() => {}}
             onClose={() => setSidebar("collapsed")}
           />
@@ -149,7 +152,7 @@ export function RoomHost({ initialRoomId, onExit }: { initialRoomId: string; onE
             onClearCreateError={() => setCreateError(null)}
             onActivate={hub.activate}
             onBurnOne={burnOne}
-            onBurnAll={burnAll}
+            onBurnAll={() => setBurnAllOpen(true)}
             onNavigate={() => setSidebar("collapsed")}
             onClose={() => setSidebar("collapsed")}
           />
@@ -195,6 +198,56 @@ export function RoomHost({ initialRoomId, onExit }: { initialRoomId: string; onE
         </div>
       )}
 
+      {/* ---------- BURN ALL confirm window ---------- */}
+      {burnAllOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="burn-all-title"
+          aria-describedby="burn-all-desc"
+        >
+          <div
+            onClick={() => setBurnAllOpen(false)}
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            aria-hidden
+          />
+          <div className="card shadow-pop relative w-full max-w-sm rounded-2xl p-5">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400">
+                <AlertTriangle className="h-5 w-5" aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 id="burn-all-title" className="text-sm font-semibold text-heading">
+                  Burn {sessions.length > 1 ? `all ${sessions.length} sessions` : "this session"}?
+                </h2>
+                <p id="burn-all-desc" className="mt-1.5 text-[13px] leading-relaxed text-secondary">
+                  All sockets close and every message, photo and voice note in memory is destroyed permanently — for
+                  you and your peer. There is no way back.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBurnAllOpen(false)}
+                className="rounded-full px-3.5 py-1.5 text-xs font-medium text-secondary transition-colors hover:text-heading"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={burnAll}
+                autoFocus
+                className="flex items-center gap-1.5 rounded-full bg-red-600 px-3.5 py-1.5 text-xs font-medium text-white transition-all duration-150 hover:bg-red-500 active:scale-[0.97]"
+              >
+                <Flame className="h-3.5 w-3.5" aria-hidden />
+                Burn everything
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

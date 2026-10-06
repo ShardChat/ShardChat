@@ -2,7 +2,7 @@
 // over actions with inline quick-reactions, markdown rendering, polls,
 // view-once media, ticks and search highlighting.
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { CornerUpLeft, Flame, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { CornerUpLeft, Flame, Maximize2, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import type { ChatMessage } from "../../types/chat";
 import { formatTime } from "../../lib/utils";
 import { AudioPlayer } from "./AudioPlayer";
@@ -91,11 +91,16 @@ export function MessageBubble({
     setMenuOpen(false);
   };
 
-  // A tap on the message itself toggles the touch bar; taps on inner
-  // buttons/links (images, poll options, quotes) keep their own behavior.
+  // A tap on the message toggles the touch bar. Media (photos, videos) is
+  // excluded from the "keep your own behavior" rule: on phones a tap on a
+  // photo/video OPENS THE ACTION BAR first (reactions, reply, delete and an
+  // explicit Open button) instead of launching the viewer, otherwise the
+  // actions stay unreachable. View-once tiles keep the burn-open gesture.
   const onRowClick = (e: ReactMouseEvent) => {
     if (!isTouch) return;
-    if ((e.target as HTMLElement).closest("button, a, input, textarea, [role='button']")) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-view-once]")) return;
+    if (t.closest("button, a, input, textarea, [role='button']") && !t.closest("[data-media-tap]")) return;
     setMenuOpen((v) => !v);
   };
 
@@ -124,6 +129,10 @@ export function MessageBubble({
 
   const canEdit = mine && m.body.kind === "text";
   const canPin = m.body.kind === "text" || m.body.kind === "poll";
+  // The touch bar shows an explicit Open button for photos (tap-on-photo
+  // opens the bar instead of the viewer on touch devices).
+  const isImageMsg =
+    m.body.kind === "image" || (m.body.kind === "file" && m.body.mime.startsWith("image/"));
 
   return (
     <div
@@ -219,6 +228,7 @@ export function MessageBubble({
                 caption={m.body.caption}
                 time={formatTime(m.timestamp)}
                 mine={mine}
+                mediaTap={isTouch}
               />
             )}
             {m.body.kind === "audio" && (
@@ -231,7 +241,7 @@ export function MessageBubble({
             )}
           </div>
         ) : isBarePhoto ? (
-          <div className={`overflow-hidden shadow-sm transition-all duration-200 ${photoRound} ${
+          <div data-media-tap className={`overflow-hidden shadow-sm transition-all duration-200 ${photoRound} ${
             m.body.kind === "file" && !m.body.attachment && m.body.caption
               ? "bg-white ring-1 ring-black/[0.08] dark:bg-zinc-900 dark:ring-white/[0.08]"
               : ""
@@ -242,6 +252,7 @@ export function MessageBubble({
               onOpenViewOnce={() => onOpenViewOnce(m.id)}
               mine={mine}
               time={formatTime(m.timestamp)}
+              mediaTap={isTouch}
             />
           </div>
         ) : (
@@ -266,14 +277,21 @@ export function MessageBubble({
             </>
           )}
 
-          {m.body.kind === "image" && <ImageAttachment b64={m.body.imageBase64} onOpenImage={onOpenImage} />}
+          {m.body.kind === "image" && <ImageAttachment b64={m.body.imageBase64} onOpenImage={onOpenImage} mediaTap={isTouch} />}
 
           {m.body.kind === "file" && m.body.caption && m.body.mime.startsWith("image/") && (() => {
             const file = m.body;
             return (
-            <div className="-mx-1 -mt-0.5">
+            <div className="-mx-1 -mt-0.5" data-media-tap={isTouch ? true : undefined}>
               {!file.viewOnce && (
-                <button type="button" onClick={() => onOpenImage(file.url)} className="block w-full">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isTouch) return;
+                    onOpenImage(file.url);
+                  }}
+                  className="block w-full"
+                >
                   <img
                     src={file.url}
                     alt={file.name}
@@ -301,7 +319,7 @@ export function MessageBubble({
           {m.body.kind === "poll" &&            <PollView body={m.body} onVote={(i) => onVote(m.id, i)} />}
 
           {m.body.kind === "file" && !m.body.attachment && !(m.body.caption && m.body.mime.startsWith("image/")) && (
-            <FileAttachment
+            <FileAttachment mediaTap={isTouch}
               body={m.body}
               onOpenImage={onOpenImage}
               onOpenViewOnce={() => onOpenViewOnce(m.id)}
@@ -358,6 +376,20 @@ export function MessageBubble({
               ))}
             </div>
             <span className="mx-0.5 h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden />
+            {isImageMsg && (
+              <button
+                type="button"
+                onClick={withClose(() => {
+                  if (m.body.kind === "image") onOpenImage(`data:image;base64,${m.body.imageBase64}`);
+                  if (m.body.kind === "file") onOpenImage(m.body.url);
+                })}
+                aria-label="Open media"
+                title="Open"
+                className={actionBtnTouch}
+              >
+                <Maximize2 className="h-4 w-4" aria-hidden />
+              </button>
+            )}
             <button type="button" onClick={withClose(() => onReply(m))} aria-label="Reply" title="Reply" className={actionBtnTouch}>
               <CornerUpLeft className="h-4 w-4" aria-hidden />
             </button>
@@ -443,12 +475,16 @@ function PhotoContent({
   onOpenViewOnce,
   mine,
   time,
+  mediaTap,
 }: {
   message: ChatMessage;
   onOpenImage: (src: string) => void;
   onOpenViewOnce: () => void;
   mine: boolean;
   time: string;
+  /** Touch: the wrapper row opens the action bar on tap; the viewer
+   *  launches only via the bar's Open button, not by tapping the photo. */
+  mediaTap: boolean;
 }) {
   const body = m.body;
   const stamp = (
@@ -462,7 +498,7 @@ function PhotoContent({
   if (body.kind === "image") {
     return (
       <div className="relative">
-        <ImageAttachment b64={body.imageBase64} onOpenImage={onOpenImage} rounded />
+        <ImageAttachment b64={body.imageBase64} onOpenImage={onOpenImage} rounded mediaTap={mediaTap} />
         {stamp}
       </div>
     );
@@ -478,6 +514,7 @@ function PhotoContent({
           caption={body.caption}
           time={time}
           mine={mine}
+          mediaTap={mediaTap}
         />
       );
     }
@@ -508,7 +545,15 @@ function PhotoContent({
     return (
       <div className={body.caption ? "bg-white dark:bg-zinc-900" : "relative"}>
         <div className="relative">
-          <button type="button" onClick={() => onOpenImage(body.url)} className="block w-full">
+          <button
+            type="button"
+            onClick={() => {
+              if (mediaTap) return;
+              onOpenImage(body.url);
+            }}
+            aria-disabled={mediaTap || undefined}
+            className="block w-full"
+          >
             <img
               src={body.url}
               alt={body.name}
@@ -541,13 +586,24 @@ function ImageAttachment({
   b64,
   onOpenImage,
   rounded = false,
+  mediaTap = false,
 }: {
   b64: string;
   onOpenImage: (src: string) => void;
   rounded?: boolean;
+  /** Touch devices: suppress the direct open so the row tap shows the
+   *  action bar first; Open then lives inside that bar. */
+  mediaTap?: boolean;
 }) {
   return (
-    <button type="button" onClick={() => onOpenImage(`data:image;base64,${b64}`)}>
+    <button
+      type="button"
+      onClick={() => {
+        if (mediaTap) return;
+        onOpenImage(`data:image;base64,${b64}`);
+      }}
+      aria-disabled={mediaTap || undefined}
+    >
       <img
         src={`data:image;base64,${b64}`}
         alt="Image"
@@ -563,10 +619,13 @@ function FileAttachment({
   body,
   onOpenImage,
   onOpenViewOnce,
+  mediaTap = false,
 }: {
   body: Extract<ChatMessage["body"], { kind: "file" }>;
   onOpenImage: (src: string) => void;
   onOpenViewOnce: () => void;
+  /** Touch: same suppression as ImageAttachment (action bar first). */
+  mediaTap?: boolean;
 }) {
   if (body.viewOnce) {
     const burned = body.revealedAt === -1;
@@ -583,7 +642,14 @@ function FileAttachment({
   }
   if (body.mime.startsWith("image/")) {
     return (
-      <button type="button" onClick={() => onOpenImage(body.url)}>
+      <button
+        type="button"
+        onClick={() => {
+          if (mediaTap) return;
+          onOpenImage(body.url);
+        }}
+        aria-disabled={mediaTap || undefined}
+      >
         <img src={body.url} alt={body.name} className="max-h-64 rounded-lg object-cover" loading="lazy" />
       </button>
     );
