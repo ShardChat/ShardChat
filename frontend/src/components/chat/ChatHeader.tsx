@@ -2,6 +2,8 @@
 // Middle: the search pill, styled like the input dock, when search is open.
 // Right: a slim controls capsule - call, video, search toggle and a "⋯" menu
 // holding countdown, safety fingerprint, burn.
+// On phones the open search pill takes over the whole row: status line and
+// controls capsule hide below md so the pill keeps a usable input width.
 import { useEffect, useRef, useState } from "react";
 import { Flame, MoreVertical, PanelLeft, Phone, Search, ShieldCheck, Video, Volume2, VolumeX } from "lucide-react";
 import { formatCountdown } from "../../lib/utils";
@@ -138,15 +140,22 @@ export function ChatHeader({
           aria-label="Show sessions panel"
           title="Sessions (Ctrl+\)"
           className={`shrink-0 rounded-lg p-1.5 text-tertiary transition-colors duration-150 hover:bg-black/[0.06] hover:text-heading dark:hover:bg-white/10 ${
-            sidebarVisible ? "md:hidden" : "md:flex"
+            searchOpen
+              ? sidebarVisible
+                ? "hidden" // rail already visible + search owns the row
+                : "hidden md:flex" // phones: give the search pill the row; desktop unchanged
+              : sidebarVisible
+                ? "md:hidden"
+                : "md:flex"
           }`}
         >
           <PanelLeft className="h-4 w-4" aria-hidden />
         </button>
       )}
 
-      {/* Brand: connection status only, pinned to the very left edge */}
-      <div className="shrink-0 leading-tight">
+      {/* Brand: connection status only, pinned to the very left edge.
+          Hidden on phones while search is open so the pill fits. */}
+      <div className={`shrink-0 leading-tight ${searchOpen ? "hidden md:block" : ""}`}>
         <StatusLine phase={phase} />
       </div>
 
@@ -163,8 +172,13 @@ export function ChatHeader({
         />
       )}
 
-      {/* Right: slim controls capsule */}
-      <div className="card ml-auto flex shrink-0 items-center gap-0.5 rounded-3xl px-1.5 py-1.5">
+      {/* Right: slim controls capsule. On phones it hides while search is
+          open — the pill needs the full row width to stay usable. */}
+      <div
+        className={`card ml-auto shrink-0 items-center gap-0.5 rounded-3xl px-1.5 py-1.5 ${
+          searchOpen ? "hidden md:flex" : "flex"
+        }`}
+      >
         <button
           type="button"
           onClick={onAudioCall}
