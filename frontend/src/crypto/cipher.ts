@@ -1,6 +1,8 @@
 // SHARD — symmetric cipher built exclusively on the native Web Crypto
 // API: AES-GCM-256 with a fresh random 12-byte IV for every payload.
-// no third-party crypto libraries, ever.
+// (The hybrid handshake's post-quantum leg in ecdh.ts is the one audited
+// third-party import — @noble/post-quantum — because WebCrypto ships no
+// ML-KEM; every symmetric operation stays right here on WebCrypto.)
 
 const IV_LENGTH = 12; // 96-bit IV: the GCM sweet spot
 

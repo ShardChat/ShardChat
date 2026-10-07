@@ -130,9 +130,33 @@ export interface ViewOnceOpenPayload {
   messageId: string;
 }
 
-/** KEY_EXCHANGE carries the peer's base64 raw ECDH public key. */
+/**
+ * GCM-sealed key-confirmation proof: encryptPayload(sessionKey, KEY_CONFIRM_PROOF).
+ * Both peers must verify the peer's proof (GCM authentication tag) before the
+ * session may enter "secure" — a tampered ML-KEM ciphertext yields a garbage
+ * decapsulated secret, so the proof check fails and the handshake aborts.
+ */
+export interface KeyConfirmProof {
+  iv: string;
+  ciphertext: string;
+}
+
+/**
+ * KEY_EXCHANGE carries the peer's hybrid handshake material (base64):
+ * - `pub`   — raw ECDH P-256 public key (65-byte point), always present.
+ * - `pqPub` — ML-KEM-768 encapsulation key (1184 bytes), MANDATORY: the
+ *             hybrid combiner is the only key-agreement path, so a packet
+ *             without it is a protocol violation and aborts the session.
+ * - `pqCT`  — ML-KEM-768 ciphertext (1088 bytes) the SENDER encapsulated
+ *             against OUR pqPub; only the lexicographically-smaller ECDH
+ *             public key encapsulates, so exactly one KEM secret is shared.
+ * - `confirm` — key-confirmation proof sealed under the derived session key.
+ */
 export interface KeyExchangePayload {
   pub: string;
+  pqPub?: string;
+  pqCT?: string;
+  confirm?: KeyConfirmProof;
 }
 
 /** JOIN carries our own public key (server relays it to the peer). */

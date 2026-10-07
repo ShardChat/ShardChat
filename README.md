@@ -18,7 +18,7 @@ The project treats server-side storage as the root of privacy failure and remove
 
 ## 2. Architectural Invariants
 
-- **Zero knowledge by construction.** All encryption happens in the browser via the native Web Crypto API. The relay only ever sees public keys and authenticated ciphertext; it cannot decrypt, filter, or moderate content.
+- **Zero knowledge by construction.** All encryption happens in the browser — the native Web Crypto API for the classical leg and every symmetric operation, the audited pure-JS `@noble/post-quantum` for the ML-KEM-768 leg (WebCrypto ships no post-quantum primitives). The relay only ever sees public keys and authenticated ciphertext; it cannot decrypt, filter, or moderate content.
 - **In-memory Go runtime.** Rooms, peer registrations, and TTL timers live exclusively in process RAM. Nothing is written to disk, to a log, or to a database. Process restart equals total amnesia.
 - **Strictly two participants.** A room accepts exactly two WebSocket peers. The third connection is rejected with `403 Room is full (2/2 peers)`.
 - **Guaranteed destruction.** A room is destroyed through a single code path — TTL expiry, the manual burn button, or the last peer disconnecting. Sockets are closed, the map entry is deleted, timers are stopped. Deletion is immediate and unrecoverable. (A single peer dropping is not treated as a departure: the room holds its seat open for `SHARD_PEER_GRACE_SECONDS` so a backgrounded phone can come back — see *Peer departure and the reconnect window*.)
@@ -31,19 +31,25 @@ The project treats server-side storage as the root of privacy failure and remove
 
 ## 3. Cryptographic Specification
 
-All cryptography runs in the browser on the native Web Crypto API. No third-party crypto libraries.
+**Hybrid Post-Quantum E2EE (NIST ML-KEM-768 / Kyber + ECDH P-256 + AES-GCM-256).**
+All cryptography runs in the browser: the native Web Crypto API powers the classical leg and every symmetric operation, while the audited pure-JS `@noble/post-quantum` implements ML-KEM-768 — WebCrypto ships no post-quantum primitives.
 
 | Primitive           | Construction                                                            | Notes                                                                     |
 | ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Key agreement       | ECDH, NIST P-256                                                        | Keypair generated in-browser; the private key never leaves the client     |
-| Key derivation      | HKDF-SHA-256                                                            | Empty salt, domain-separated info `shard-aes-256-gcm`, 256-bit output |
+| Classical leg       | ECDH, NIST P-256                                                        | Keypair generated in-browser; the private key never leaves the client     |
+| Post-quantum leg    | ML-KEM-768 (Kyber, FIPS 203) via `@noble/post-quantum`                  | 1184-B encapsulation key, 1088-B ciphertext; exactly one encapsulation per session — the peer with the lexicographically smaller base64 ECDH public key encapsulates, so no role negotiation is needed |
+| Key agreement       | Hybrid combiner: 32 B ECDH secret ‖ 32 B ML-KEM secret                  | A future quantum attacker must break BOTH legs; either alone is useless   |
+| Key derivation      | HKDF-SHA-256 over the 64-byte hybrid secret                             | Empty salt, domain-separated info `shard-hybrid-pq-aes-256-gcm`, 256-bit output |
 | Session cipher      | AES-256-GCM                                                             | Fresh 12-byte CSPRNG IV per payload; key is non-extractable after import  |
 | Integrity           | GCM authentication tag                                                  | Any tampered byte fails decryption                                        |
-| Safety fingerprint  | SHA-256 over the raw ECDH shared secret                                 | 4 deterministic emojis from a 64-symbol pool; compared out of band        |
+| Key confirmation    | AES-GCM proof sealed under the session key                              | Both peers verify the peer's proof before "secure"; a tampered KEM ciphertext (implicit-rejection secret) aborts the session |
+| Safety fingerprint  | SHA-256 over the combined hybrid secret (ECDH ‖ ML-KEM)                 | 4 deterministic emojis from a 64-symbol pool; compared out of band        |
 | Room identifiers    | `crypto/rand`, 10 characters, 58-symbol alphabet (no `l I O 0 1`)       | 58^10 keyspace, rejection sampling against modulo bias                    |
 | Transport           | TLS (HTTPS / WSS)                                                       | Terminates at the relay; payload confidentiality is preserved end-to-end  |
 
 The 4-emoji fingerprint is the out-of-band authentication channel: both peers see the same four emojis, derived from the shared secret. If they match when compared by voice or in person, no man-in-the-middle holds the real session key.
+
+The handshake is additionally fail-closed by construction: `pqPub` is structurally mandatory (the hybrid combiner is the only key-agreement path — a `KEY_EXCHANGE` without a valid ML-KEM key aborts the session instead of falling back to classic ECDH), both peers must verify each other's GCM key-confirmation proof before the session may enter the secure phase, and a packet presenting our own public key back to us (mirror/reflection or a relay replaying our stale cached envelope on reconnect) is ignored outright.
 
 ## 4. Protocol Sequence
 
@@ -56,15 +62,17 @@ POST /api/rooms                →  mint 10-char room id, arm TTL timer
    ◄─ {roomId, expiresAt}         (no disk, no database)
 GET /ws/{roomId} ────────────►  register peer 1/2
    ◄─ WELCOME {expiresAt}
-generate ECDH P-256 keypair
+generate ECDH P-256 + ML-KEM-768 keypairs
 JOIN {pub: A.public} ────────►
                                                                   GET /ws/{roomId} ─────────►  register peer 2/2
                                                                   ◄─ WELCOME {expiresAt}
    ◄─ PEER_JOINED {peerCount: 2}
                                                                   JOIN {pub: B.public} ─────►
-   ◄─ KEY_EXCHANGE {pub: B.public}
+   ◄─ KEY_EXCHANGE {pub: B.public, pqPub: B.kyber, pqCT: encaps(B→A), confirm}
+KEY_EXCHANGE {pub: A.public, pqPub: A.kyber, confirm} ──────────────────────►
 derive AES-256-GCM key ───────  (relay sees public keys only)  ────────  derive AES-256-GCM key
-verify 4-emoji fingerprint ◄─── SHA-256(raw shared secret) ─────► verify 4-emoji fingerprint
+        │ HKDF(ECDH ‖ ML-KEM-768 secret)                                │ HKDF(ECDH ‖ ML-KEM-768 secret)
+verify 4-emoji fingerprint ◄─── SHA-256(combined hybrid secret) ─────► verify 4-emoji fingerprint
 
 CIPHER_MESSAGE {iv, ct} ─────►  ─────────────────────────────►  CIPHER_MESSAGE {iv, ct}   ◄─ decrypt
    · edits, deletes, pins, polls, reactions, typing, read receipts — same sealed envelope
@@ -142,7 +150,7 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 | ---------------- | ------------------------------------------------------------------- |
 | Relay            | Go 1.26, `gorilla/websocket` (the only backend dependency)         |
 | Client           | React 18, TypeScript 5.9, Vite 7, Tailwind CSS 4                   |
-| Cryptography     | Native Web Crypto API (no third-party crypto code)                  |
+| Cryptography     | Native Web Crypto API + `@noble/post-quantum` (ML-KEM-768; the only third-party crypto) |
 | Calls            | Native `RTCPeerConnection`, signaling relayed in-session            |
 |                  | (no third-party broker); TURN credentials brokered by Go           |
 | Extras           | JSZip (archive inspection), react-markdown, qrcode.react            |
@@ -289,7 +297,7 @@ Two details are load-bearing rather than cosmetic:
 - **The manifest must be served as `application/manifest+json`.** Go's MIME table has no `.webmanifest` entry, so `http.ServeFile` sniffs the bytes and answers `text/plain` — and since `SecurityHeaders` sends `X-Content-Type-Options: nosniff`, the browser refuses to parse it and the install prompt silently disappears behind a `200`. `cmd/server/main.go` pins the type with `mime.AddExtensionType`. If you host the bundle anywhere else (Option A's static site, nginx, a CDN), **check that host returns `application/manifest+json` for `/manifest.webmanifest`**, or name the file `manifest.json`, which every host already maps to `application/json`.
 - **There is deliberately no service worker.** Chrome's install criteria no longer require one, so the manifest alone buys the install. A caching worker would sit badly with this project's guarantees: it can pin a stale app shell indefinitely, and any future runtime caching rule touching `/api` or `/ws` would persist sealed session traffic — exactly what the zero-retention design forbids. Offline support, if it is ever wanted, should be an explicit, reviewed decision rather than a default.
 
-In-browser cryptographic self-test (key agreement, deterministic fingerprints, GCM round-trips):
+In-browser cryptographic self-test (hybrid ECDH + ML-KEM-768 agreement, deterministic fingerprints, GCM round-trips):
 
 ```js
 import("/src/crypto/selftest.ts").then((m) => m.runCryptoSelfTest());
@@ -302,6 +310,7 @@ import("/src/crypto/selftest.ts").then((m) => m.runCryptoSelfTest());
 - A curious or coerced relay operator. The server relays opaque ciphertext and holds no decryption material.
 - Server compromise or seizure. There is no database, no disk persistence, and no backup; a seized machine yields room IDs and nothing else.
 - Passive network eavesdropping. TLS protects the transport; payload confidentiality does not depend on it.
+- Harvest-now-decrypt-later quantum attacks. The hybrid ML-KEM-768 (Kyber) leg keeps recorded ciphertext sealed even against a future cryptographically relevant quantum computer: breaking the session key requires defeating BOTH ML-KEM-768 and ECDH P-256.
 - Retention by accident. Rooms exist only in RAM and die by timer, by button, or when both peers leave.
 
 **SHARD does not protect against:**
@@ -312,7 +321,7 @@ import("/src/crypto/selftest.ts").then((m) => m.runCryptoSelfTest());
 - Room link leakage. The link is the only credential. Until both seats are filled, anyone holding it can take one.
 - Man-in-the-middle on first contact. The relay could swap public keys. The 4-emoji fingerprint exists precisely for this: verify it through a second channel before discussing anything sensitive.
 - Metadata correlation. The relay necessarily knows that two anonymous connections met and how much data they exchanged.
-- Post-quantum adversaries. ECDH P-256 is not quantum-resistant.
+- Quantum authentication is not identity. The hybrid KEM makes the channel confidential against quantum adversaries, but confirming WHO holds the other end still rests on the manual 4-emoji fingerprint comparison.
 - WebRTC IP exposure. Peer-to-peer media inherently reveals IP addresses to the peer and to the TURN service.
 - Infrastructure logs outside SHARD. The relay writes no IP addresses, but a hosting provider, CDN, or reverse proxy in front of it records connection metadata under its own policy. Read the deployment chain's terms if that boundary matters to you.
 
@@ -331,11 +340,11 @@ No trust in this document is required — every claim below is checkable in unde
    ```
 
 4. Search all frames (`Ctrl+F`) for any word you just sent. The plaintext does not appear — not once. Repeat with file transfers: `FILE_CHUNK_DATA` frames are the same sealed format.
-5. The only plaintext on the wire is by design: base64 public keys (`JOIN`, `KEY_EXCHANGE`), room IDs, and timestamps.
+5. The only plaintext on the wire is by design: base64 public keys (`JOIN`, `KEY_EXCHANGE` — the latter now also carries the ~1.6 KB ML-KEM-768 encapsulation key and the ~1.5 KB encapsulation ciphertext), room IDs, and timestamps.
 6. Check the relay console: logs contain `[room] destroyed id=... reason=...` lines only. `GET /healthz` answers `{"status":"ok","liveRooms":N,"liveConns":M,"maxConns":600}` — no content, no identifiers beyond counters.
 7. Restart the relay process mid-session. The room is gone — RAM-only storage means there is nothing to recover.
 8. Open the same link in a third browser profile. You get a "Session is Full" screen, and the Network tab shows no further `/api` or `/ws` requests: the rejection is terminal, not a retry loop.
-9. Optional: run the in-browser cryptographic self-test from the console (see section 9). It validates ECDH agreement, fingerprint determinism, and AES-GCM round-trips against the browser's own Web Crypto implementation.
+9. Optional: run the in-browser cryptographic self-test from the console (see section 9). It validates the hybrid ECDH + ML-KEM-768 agreement (both peers derive the same key, proven with a real GCM tag), fingerprint determinism, and AES-GCM round-trips against the browser's own Web Crypto implementation.
 
 ## 13. License
 

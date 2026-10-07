@@ -17,7 +17,7 @@ import { navigate } from "../App";
 const FAQS = [
   {
     q: "How private is a SHARD session?",
-    a: "Completely. Encryption is computed locally via the native Web Crypto API (ECDH P-256 + AES-256-GCM). The server acts as a blind relay: it transmits sealed envelopes and has zero mathematical ability to decrypt your data.",
+    a: "Completely. Every session runs Hybrid Post-Quantum E2EE (NIST ML-KEM-768 / Kyber + ECDH P-256 + AES-GCM-256). The classical handshake is computed by the native Web Crypto API, the post-quantum KEM by an audited pure-JS library — and the server still acts as a blind relay with zero mathematical ability to decrypt your data.",
   },
   {
     q: "Where are my messages and files stored?",
@@ -29,7 +29,7 @@ const FAQS = [
   },
   {
     q: "How do I know the connection is authentic?",
-    a: "Both participants see an identical 4-emoji safety fingerprint derived from the shared secret. If the emojis match, no man-in-the-middle holds your session key.",
+    a: "Both participants see an identical 4-emoji safety fingerprint derived from the combined hybrid secret (ECDH ‖ ML-KEM). If the emojis match, no man-in-the-middle holds your session key.",
   },
   {
     q: "Can a third person join the room?",
@@ -46,7 +46,7 @@ const FEATURES = [
     chip: "Privacy",
     t: "Server sees nothing",
     d: "All messages and files are sealed directly in your browser. Relay operators only ever see opaque ciphertext and hold zero decryption keys.",
-    meta: "E2EE · always",
+    meta: "Hybrid PQ E2EE · always",
   },
   {
     chip: "Storage",
@@ -84,7 +84,7 @@ const STEPS = [
 ] as const;
 
 /** Trust badges under the hero CTA. */
-const BADGES = ["100% Open Source (AGPLv3)", "Zero Telemetry", "Client-Side Web Crypto"] as const;
+const BADGES = ["100% Open Source (AGPLv3)", "Zero Telemetry", "Hybrid Post-Quantum E2EE"] as const;
 
 // retention-comparison chart: how far each messenger sits from "zero kept".
 // pct is a position on the shared time axis; the axis itself is inset from

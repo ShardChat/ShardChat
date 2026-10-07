@@ -264,7 +264,7 @@ export function ChatHeader({
                       ))}
                     </div>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-tertiary">
-                      Derived from the shared ECDH secret. Compare with your peer over another channel: if they match, the
+                      Derived from the hybrid ECDH + ML-KEM secret. Compare with your peer over another channel: if they match, the
                       channel is genuine.
                     </p>
                   </>

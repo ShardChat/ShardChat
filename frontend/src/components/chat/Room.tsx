@@ -54,12 +54,13 @@ function purgeBadgeText(stats: PurgeStats | null): string {
   } wiped · Keys Destroyed`;
 }
 
-/** The three ways a one-time session can end. The row the client actually
+/** The ways a one-time session can end. The row the client actually
  *  detected (see PurgeStats.reason) is highlighted as the detected cause. */
 const BURN_CAUSES = [
   { reason: "timer", icon: Clock, text: "The session's lifetime timer expired." },
   { reason: "manual", icon: Flame, text: "A participant manually burned the session." },
   { reason: "peer-left", icon: DoorOpen, text: "A participant closed their browser tab." },
+  { reason: "handshake", icon: ShieldAlert, text: "Cryptographic handshake failed — a downgrade or tampering attempt was refused." },
 ] as const;
 
 export const Room = forwardRef<RoomHandle, RoomProps>(function Room(

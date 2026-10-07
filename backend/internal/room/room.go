@@ -32,7 +32,10 @@ const emptyGracePeriod = 10 * time.Second
 var PairGracePeriod = 45 * time.Second
 
 // maxCachedEnvelope caps the handshake cache: the room stores one
-// KEY_EXCHANGE packet — a ~400-byte public key envelope — never bulk data.
+// KEY_EXCHANGE packet — a ~3.3 KB hybrid envelope (ECDH point + 1.2 KB
+// ML-KEM-768 encapsulation key + 1.1 KB ciphertext + confirmation proof) —
+// never bulk data. The 64 KB cap keeps a ~19x margin over the largest
+// legitimate packet while still refusing any bulk payload.
 const maxCachedEnvelope = 1 << 16 // 64 KB
 
 // RemovalReason explains why a room left memory (operational logging only,
@@ -251,10 +254,22 @@ func (r *Room) CachedEnvelope() []byte {
 // CachedEnvelopeFor replays the handshake cache to c, unless the cache was
 // produced by c itself: a reconnecting peer must never receive its own
 // stale public key back.
+//
+// The stale-self guard is SEAT-aware, not pointer-aware: a reconnect creates
+// a NEW *Client for the same participant, so comparing pointers alone would
+// replay the participant's own outdated key envelope back to them and split
+// the handshake (their fresh keys vs. their cached old keys). Non-empty seat
+// tokens identify the participant across reconnects; fully anonymous clients
+// (no seat token) keep the pointer check only — there is no stronger signal
+// available, and the client additionally ignores any KEY_EXCHANGE carrying
+// its own public key (reflection guard).
 func (r *Room) CachedEnvelopeFor(c *Client) []byte {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.cachedEnvelope == nil || r.cachedFrom == c {
+		return nil
+	}
+	if c.Seat != "" && r.cachedFrom != nil && r.cachedFrom.Seat == c.Seat {
 		return nil
 	}
 	return r.cachedEnvelope

@@ -1,6 +1,7 @@
 // SHARD — chat session core. Owns the whole E2EE lifecycle:
-// JOIN -> PEER_JOINED -> KEY_EXCHANGE -> shared AES key -> encrypted traffic.
-// everything the server relays beyond the handshake is ciphertext.
+// JOIN -> PEER_JOINED -> KEY_EXCHANGE (hybrid ECDH P-256 + ML-KEM-768) ->
+// shared AES key -> encrypted traffic. everything the server relays beyond
+// the handshake is ciphertext.
 // session deltas (edit/delete/pin/polls/view-once) ride dedicated packet
 // types whose payloads are sealed with the same shared AES-GCM-256 key.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -8,11 +9,18 @@ import { useWebSocket, type WsStatus } from "./useWebSocket";
 import {
   deriveSharedKey,
   generateECDHKeyPair,
+  generateKEMKeyPair,
   generateEmojiFingerprint,
   exportPublicKey,
+  exportKEMPublicKey,
   importPublicKey,
+  encapsulate,
+  decapsulate,
+  zeroize,
+  KEM_PUBLIC_KEY_LENGTH,
+  KEM_CIPHERTEXT_LENGTH,
 } from "../crypto/ecdh";
-import { encryptPayload, decryptPayload } from "../crypto/cipher";
+import { encryptPayload, decryptPayload, fromBase64 } from "../crypto/cipher";
 import { compressImage } from "../lib/media";
 import { checkFile } from "../lib/fileSecurity";
 import { useFileTransfer } from "./useFileTransfer";
@@ -29,6 +37,7 @@ import type {
   ViewOnceOpenPayload,
   WelcomePayload,
   PeerEventPayload,
+  KeyConfirmProof,
   WSPacket,
 } from "../types/protocol";
 import type { ChatMessage, MessageBody, PollBody, TransferState } from "../types/chat";
@@ -48,9 +57,16 @@ export type SessionPhase =
 const TYPING_DEBOUNCE_MS = 300;
 const TYPING_EXPIRE_MS = 3000;
 
+/** Constant plaintext of the GCM key-confirmation proof. The proof binds the
+ *  SESSION KEY itself: a peer that cannot decrypt/re-seal it under the derived
+ *  key fails the GCM tag and never reaches "secure". This is what turns a
+ *  tampered ML-KEM ciphertext (implicit-rejection garbage secret) into an
+ *  immediate, visible abort instead of a silently broken session. */
+const KEY_CONFIRM_PROOF = "shard-hybrid-key-confirmed";
+
 /** Why the session ended — derived from real signals (server goodbye,
  *  PEER_LEFT, TTL deadline) and shown as the highlighted cause row. */
-export type BurnReason = "manual" | "peer-left" | "timer" | "restart";
+export type BurnReason = "manual" | "peer-left" | "timer" | "restart" | "handshake";
 
 /** Real numbers behind the burned-screen badge: what THIS tab held in RAM
  *  and purged when the session ended — measured first, then wiped for real. */
@@ -130,6 +146,22 @@ export function useChatSession(roomId: string): UseChatSessionResult {
   // Mutable session state kept in refs (no re-render storms).
   const keyPairRef = useRef<CryptoKeyPair | null>(null);
   const sharedKeyRef = useRef<CryptoKey | null>(null);
+  // Hybrid post-quantum leg: own ML-KEM-768 keypair + handshake material.
+  // myPubRef caches our exported ECDH key — the encapsulator rule compares
+  // the two base64 public keys deterministically on BOTH peers.
+  const kemPairRef = useRef<{ publicKey: Uint8Array; secretKey: Uint8Array } | null>(null);
+  const myPubRef = useRef<string | null>(null);
+  const myPqPubRef = useRef<string | null>(null);
+  const peerPqPubRef = useRef<string | null>(null);
+  const peerPqCTRef = useRef<string | null>(null);
+  const pqCTRef = useRef<string | null>(null);
+  const pqSecretRef = useRef<Uint8Array | null>(null);
+  const pqSentRef = useRef(false);
+  /** Key confirmation: the peer's GCM proof + whether ours already left. */
+  const peerConfirmRef = useRef<KeyConfirmProof | null>(null);
+  const confirmSentRef = useRef(false);
+  /** Serializes the async establishSecure body (single-flight per epoch). */
+  const hsBusyRef = useRef(false);
   const peerJoinedRef = useRef(false);
   const exchangedRef = useRef(false);
   const exchSentRef = useRef(false);
@@ -206,6 +238,8 @@ export function useChatSession(roomId: string): UseChatSessionResult {
     setPinnedId(null);
     keyPairRef.current = null;
     sharedKeyRef.current = null;
+    wipePQMaterial();
+    setFingerprint(null);
   }, [phase]);
 
   /** Ends the session for good. The first end-signal latches the cause:
@@ -217,6 +251,21 @@ export function useChatSession(roomId: string): UseChatSessionResult {
     setPhase("burned");
   }, []);
 
+  /** FAIL-CLOSED abort of a tampered/downgraded handshake. The hybrid KEM is
+   *  the ONLY key-agreement path, so a KEY_EXCHANGE without a valid pqPub, a
+   *  malformed pqCT, or a failed key confirmation can never be negotiated
+   *  down to classic ECDH — the session terminates visibly instead. Wipes
+   *  all secret material first, then latches the terminal phase. */
+  const abortHandshake = useCallback(() => {
+    if (terminalRef.current) return;
+    wipePQMaterial();
+    sharedKeyRef.current = null;
+    keyPairRef.current = null;
+    if (burnReasonRef.current === null) burnReasonRef.current = "handshake";
+    terminalRef.current = true;
+    setPhase("gone");
+  }, []);
+
   // Chunked file streaming: the wire sees ~86 KB sealed chunks;
   // the relay forwards each immediately, buffering nothing.
   const { sendFile, handleChunkPacket } = useFileTransfer({
@@ -226,34 +275,126 @@ export function useChatSession(roomId: string): UseChatSessionResult {
   const phaseRef = useRef<SessionPhase>("connecting");
   phaseRef.current = phase;
 
+  /** Zeroizes owned PQ secret material and drops every handshake ref.
+   *  Best-effort heap hygiene: see zeroize() in crypto/ecdh.ts. */
+  function wipePQMaterial() {
+    zeroize(kemPairRef.current?.secretKey);
+    kemPairRef.current = null;
+    zeroize(pqSecretRef.current);
+    pqSecretRef.current = null;
+    // public handshake material: dropped, zeroization not needed
+    pqCTRef.current = null;
+    peerPqPubRef.current = null;
+    peerPqCTRef.current = null;
+    peerConfirmRef.current = null;
+    pqSentRef.current = false;
+    confirmSentRef.current = false;
+  }
+
+  /**
+   * Resolves the post-quantum leg of the hybrid handshake.
+   *
+   * Exactly ONE encapsulation exists per session: the peer holding the
+   * lexicographically smaller base64 ECDH public key encapsulates against
+   * the other's ML-KEM-768 key — a deterministic, strictly-ordered tie-break
+   * both peers compute identically from material they already have (strict
+   * total order on distinct byte strings ⇒ never both, never neither).
+   * Returns null while KEM material is still in flight.
+   */
+  const resolvePQLeg = useCallback((): Uint8Array | null => {
+    const kem = kemPairRef.current;
+    const myPub = myPubRef.current;
+    const peerPub = peerPubRef.current;
+    if (!kem || !myPub || !peerPub) return null;
+    if (myPub < peerPub) {
+      const peerPqPub = peerPqPubRef.current;
+      if (!peerPqPub) return null;
+      if (pqSentRef.current && pqSecretRef.current) return pqSecretRef.current;
+      const { cipherTextB64, sharedSecret } = encapsulate(peerPqPub);
+      pqSecretRef.current = sharedSecret;
+      pqCTRef.current = cipherTextB64;
+      pqSentRef.current = true;
+      // The ciphertext ships together with our key-confirmation proof from
+      // establishSecure — one self-sufficient follow-up packet carries both.
+      return sharedSecret;
+    }
+    const peerCT = peerPqCTRef.current;
+    if (!peerCT) return null;
+    const secret = decapsulate(peerCT, kem.secretKey);
+    pqSecretRef.current = secret;
+    return secret;
+  }, []);
+
   const establishSecure = useCallback(async () => {
     const pair = keyPairRef.current;
     const peerPub = peerPubRef.current;
-    if (!pair || !peerPub || exchangedRef.current) return;
-    exchangedRef.current = true;
+    const myPub = myPubRef.current;
+    const myPqPub = myPqPubRef.current;
+    const kem = kemPairRef.current;
+    if (!pair || !peerPub || !myPub || !myPqPub || !kem || exchangedRef.current || hsBusyRef.current) return;
+    hsBusyRef.current = true;
     try {
-      const peerKey = await importPublicKey(peerPub);
-      const shared = await deriveSharedKey(pair.privateKey, peerKey);
-      sharedKeyRef.current = shared;
-      const fp = await generateEmojiFingerprint(pair.privateKey, peerKey);
-      setFingerprint(fp);
+      if (!sharedKeyRef.current) {
+        const pqSecret = resolvePQLeg();
+        if (!pqSecret) return; // PQ material in flight; the next KEY_EXCHANGE re-enters
+        const peerKey = await importPublicKey(peerPub);
+        sharedKeyRef.current = await deriveSharedKey(pair.privateKey, peerKey, pqSecret);
+        setFingerprint(await generateEmojiFingerprint(pair.privateKey, peerKey, pqSecret));
+        // Key confirmation, phase 1: seal the proof under the fresh session
+        // key and ship it. The encapsulator piggybacks it onto the packet
+        // that carries the KEM ciphertext; the decapsulator sends a
+        // confirm-only follow-up. Both packets are self-sufficient.
+        const proof = await encryptPayload(sharedKeyRef.current, KEY_CONFIRM_PROOF);
+        confirmSentRef.current = true;
+        const payload: KeyExchangePayload = {
+          pub: myPub,
+          pqPub: myPqPub,
+          ...(pqCTRef.current ? { pqCT: pqCTRef.current } : {}),
+          confirm: proof,
+        };
+        send({ type: "KEY_EXCHANGE", payload });
+      }
+      // Key confirmation, phase 2: verify the peer's proof. AES-GCM
+      // authentication IS the check — a single wrong byte throws
+      // OperationError. This is what makes a tampered ML-KEM ciphertext
+      // (implicit-rejection garbage secret) an immediate abort instead of
+      // a "secure" phase with a key the peer does not hold.
+      const peerConfirm = peerConfirmRef.current;
+      if (!peerConfirm) return; // proof in flight; the next packet re-enters
+      const verified = await decryptPayload<string>(sharedKeyRef.current, peerConfirm.iv, peerConfirm.ciphertext);
+      if (verified !== KEY_CONFIRM_PROOF) throw new Error("key confirmation mismatch");
+      exchangedRef.current = true;
       setPhase("secure");
     } catch {
-      // An invalid curve point / malformed key from the peer (or a
-      // flaky crypto backend) must never surface as an unhandled rejection
-      // or crash the promise chain - the handshake just fails quietly and
-      // an be re-attempted on the next KEY_EXCHANGE.
-      exchangedRef.current = false;
+      // Fail closed: a malformed peer key, a tampered ciphertext or a failed
+      // key confirmation must never degrade into classic-only ECDH or a
+      // dead "secure" phase — terminate the session with a visible cause.
+      abortHandshake();
+    } finally {
+      hsBusyRef.current = false;
     }
-  }, []);
+  }, [send, resolvePQLeg, abortHandshake]);
 
   const tryKeyExchange = useCallback(() => {
-    if (peerLeftRef.current || !peerJoinedRef.current || !keyPairRef.current || exchSentRef.current) return;
+    const myPub = myPubRef.current;
+    const myPqPub = myPqPubRef.current;
+    const pqCT = pqCTRef.current;
+    if (
+      peerLeftRef.current ||
+      !peerJoinedRef.current ||
+      !keyPairRef.current ||
+      !myPub ||
+      !myPqPub ||
+      exchSentRef.current
+    ) {
+      return;
+    }
     setPhase("exchanging");
     exchSentRef.current = true;
-    exportPublicKey(keyPairRef.current.publicKey).then((pub) => {
-      send({ type: "KEY_EXCHANGE", payload: { pub } satisfies KeyExchangePayload });
-    });
+    // Hybrid handshake: both public keys ride every packet; our KEM
+    // ciphertext joins when we have already encapsulated (resend paths).
+    const payload: KeyExchangePayload = { pub: myPub, pqPub: myPqPub, ...(pqCT ? { pqCT } : {}) };
+    send({ type: "KEY_EXCHANGE", payload });
   }, [send]);
 
   // fresh (re)connect: restore a clean handshake slate, and JOIN strictly
@@ -269,6 +410,12 @@ export function useChatSession(roomId: string): UseChatSessionResult {
     peerPubRef.current = null;
     keyPairRef.current = null;
     peerLeftRef.current = false;
+    // Hybrid PQ handshake state resets with the new epoch (secret buffers
+    // are zeroized before their references are dropped).
+    myPubRef.current = null;
+    myPqPubRef.current = null;
+    wipePQMaterial();
+    hsBusyRef.current = false;
     if (terminalRef.current) {
       // The session already ended. A reconnect after the burn must NOT restart
       // it: setPhase("connecting") here used to drop Room out of its burned
@@ -281,6 +428,11 @@ export function useChatSession(roomId: string): UseChatSessionResult {
       if (epoch !== sessionEpochRef.current) return; // superseded handshake
       keyPairRef.current = pair;
       const pub = await exportPublicKey(pair.publicKey);
+      // Post-quantum leg: pure-JS ML-KEM-768 keygen (a few ms, CSPRNG-backed).
+      const kem = generateKEMKeyPair();
+      kemPairRef.current = kem;
+      myPubRef.current = pub;
+      myPqPubRef.current = exportKEMPublicKey(kem.publicKey);
       pendingJoinRef.current = { type: "JOIN", payload: { pub } };
       // If the socket already opened before the keys were ready, fire now;
       // otherwise the onopen handler will pick pendingJoinRef up.
@@ -298,11 +450,14 @@ export function useChatSession(roomId: string): UseChatSessionResult {
 
   useEffect(() => {
     const offPacket = on((pkt: WSPacket) => {
-      // Client barrier: application traffic that arrives before the E2EE
-      // channel is established is by definition spoofed or stale — the peer
-      // had no shared key to seal it with. Drop before it touches any state.
+      // Client barrier: application traffic that arrives before a session
+      // key is DERIVED is by definition spoofed or stale — the peer had no
+      // shared key to seal it with. Keyed on sharedKeyRef, not the phase:
+      // during key confirmation one peer may already hold the key while the
+      // other is still awaiting the proof, and such traffic is decryptable
+      // under the confirmed key and safe to process.
       if (
-        phaseRef.current !== "secure" &&
+        !sharedKeyRef.current &&
         (pkt.type === "CIPHER_MESSAGE" ||
           pkt.type === "TYPING" ||
           pkt.type === "REACTION" ||
@@ -348,7 +503,43 @@ export function useChatSession(roomId: string): UseChatSessionResult {
           // point (~88 chars). Anything else never reaches WebCrypto.
           const pub = p?.pub;
           if (typeof pub === "string" && pub.length >= 86 && pub.length <= 92 && /^[A-Za-z0-9+/]+=*$/.test(pub)) {
+            // Reflected/replayed OWN key guard: an honest peer mints fresh
+            // keys and can never present OUR public key back to us. Kills
+            // mirror attacks and the relay's stale-self-envelope replay on
+            // reconnect (mirrored fix: room.go CachedEnvelopeFor).
+            if (myPubRef.current && pub === myPubRef.current) break;
+            // Downgrade prevention: pqPub is structurally MANDATORY — the
+            // hybrid combiner is the ONLY key-agreement path. A packet
+            // without a valid ML-KEM key is a protocol violation, not an
+            // excuse for a classic-only fallback → fail closed.
+            if (!isBase64OfLength(p?.pqPub, KEM_PUBLIC_KEY_LENGTH)) {
+              abortHandshake();
+              break;
+            }
+            // Present-but-malformed PQ/confirm fields are violations too.
+            if (
+              (p?.pqCT !== undefined && !isBase64OfLength(p.pqCT, KEM_CIPHERTEXT_LENGTH)) ||
+              (p?.confirm !== undefined && !isConfirmShape(p.confirm))
+            ) {
+              abortHandshake();
+              break;
+            }
+            // The peer re-announced under a DIFFERENT key: their seat came
+            // back with a fresh identity (reconnect). Re-arm the whole
+            // handshake so both peers converge on the new material instead
+            // of holding split keys.
+            if (peerPubRef.current && peerPubRef.current !== pub) {
+              exchangedRef.current = false;
+              exchSentRef.current = false;
+              zeroize(pqSecretRef.current);
+              sharedKeyRef.current = null;
+              wipePQMaterial();
+              setPhase((cur) => (cur === "secure" || cur === "peer_away" ? "exchanging" : cur));
+            }
             peerPubRef.current = pub;
+            peerPqPubRef.current = p.pqPub;
+            if (p?.pqCT) peerPqCTRef.current = p.pqCT;
+            if (p?.confirm) peerConfirmRef.current = p.confirm;
             // the joining peer never sees PEER_JOINED (the server notifies
             // only the first seat), so answer with our own key right here.
             tryKeyExchange();
@@ -995,6 +1186,24 @@ export function useChatSession(roomId: string): UseChatSessionResult {
 export const VIEW_ONCE_PREFIX = "burn-once:";
 
 const UTF8 = new TextEncoder();
+
+/** True when s is base64 decoding to exactly rawLen bytes (untrusted wire input). */
+function isBase64OfLength(s: unknown, rawLen: number): s is string {
+  if (typeof s !== "string" || s.length > Math.ceil(rawLen / 3) * 4 + 4) return false;
+  if (!/^[A-Za-z0-9+/]+=*$/.test(s)) return false;
+  try {
+    return fromBase64(s).length === rawLen;
+  } catch {
+    return false;
+  }
+}
+
+/** Light structural check of a GCM key-confirmation proof envelope;
+ *  cryptographic validity is enforced by the GCM tag itself. */
+function isConfirmShape(c: unknown): c is KeyConfirmProof {
+  const p = c as KeyConfirmProof | null;
+  return !!p && typeof p.iv === "string" && p.iv.length > 0 && typeof p.ciphertext === "string" && p.ciphertext.length > 0;
+}
 
 /** Approximate in-memory size of one decrypted message body, in bytes. */
 function bodyBytes(body: MessageBody): number {
