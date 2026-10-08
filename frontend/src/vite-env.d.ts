@@ -13,6 +13,10 @@ interface ImportMetaEnv {
   readonly VITE_WS_URL?: string;
   /** Origin of the shard-media SFU node (call signaling + media), e.g. wss://shard-media.onrender.com */
   readonly VITE_MEDIA_URL?: string;
+  /** Call transport strategy: "p2p" (direct WebRTC via the relay's signaling,
+   *  default) or "sfu" (media through the shard-media node). Unset → "sfu"
+   *  only when VITE_MEDIA_URL is set, otherwise "p2p". */
+  readonly VITE_CALL_TRANSPORT?: "p2p" | "sfu";
 }
 
 interface ImportMeta {

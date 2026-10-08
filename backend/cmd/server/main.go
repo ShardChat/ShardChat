@@ -198,6 +198,11 @@ func main() {
 	// WS: join a session as one of exactly two peers.
 	mux.HandleFunc("GET /ws/{roomId}", wsHandler.ServeWS)
 
+	// ICE/TURN bootstrap for P2P calls: hands the caller its STUN/TURN list
+	// so the browser bundle never hardcodes third-party credentials and the
+	// TURN fleet can be swapped from the Render dashboard alone.
+	mux.HandleFunc("GET /api/webrtc-config", webrtcConfigHandler)
+
 	// Room existence probe: lets a stuck client distinguish "waiting for
 	// peer" from "room burned / server restarted" and stop reconnecting.
 	// Existence + occupancy only.
@@ -317,6 +322,51 @@ func safeRelPath(urlPath string) string {
 		return ""
 	}
 	return filepath.FromSlash(clean)
+}
+
+// iceServer mirrors the browser's RTCIceServer for the wire.
+type iceServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
+// splitURLs turns a comma-separated env value into a clean URL list.
+func splitURLs(raw string) []string {
+	var out []string
+	for _, u := range strings.Split(raw, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// webrtcConfigHandler answers GET /api/webrtc-config with the ICE servers
+// P2P callers should configure their RTCPeerConnection with:
+//
+//	{"iceServers":[{"urls":["stun:..."]},{"urls":["turn:..."],"username":...,"credential":...}]}
+//
+// Every value is deployment configuration, not code: STUN_URLS, TURN_URLS,
+// TURN_USERNAME and TURN_CREDENTIAL are read from the environment at request
+// time, so a TURN provider change is a dashboard edit — never a client
+// rebuild. Defaults point at Cloudflare STUN plus the public OpenRelay TURN
+// fleet (open credentials by design; they protect nobody who trusts them —
+// they only make relayed ICE reachable). No state, no rate-limit-sensitive
+// work: three os.Getenv calls and a small JSON body.
+func webrtcConfigHandler(w http.ResponseWriter, r *http.Request) {
+	servers := make([]iceServer, 0, 2)
+	if stun := splitURLs(envOr("STUN_URLS", "stun:stun.cloudflare.com:3478")); stun != nil {
+		servers = append(servers, iceServer{URLs: stun})
+	}
+	if turn := splitURLs(envOr("TURN_URLS", "turn:openrelay.metered.ca:80,turn:openrelay.metered.ca:443,turns:openrelay.metered.ca:443?transport=tcp")); turn != nil {
+		servers = append(servers, iceServer{
+			URLs:       turn,
+			Username:   envOr("TURN_USERNAME", "openrelay"),
+			Credential: envOr("TURN_CREDENTIAL", "openrelay"),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"iceServers": servers})
 }
 
 func withCORS(allowedSpec string, next http.Handler) http.Handler {

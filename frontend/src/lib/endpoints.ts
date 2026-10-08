@@ -102,6 +102,12 @@ export function mediaWsEndpoint(roomId: string): string {
   return `${base}/ws/${encodeURIComponent(roomId)}`;
 }
 
+/** ICE/TURN bootstrap for P2P calls, served by the Go relay so the browser
+ *  bundle never hardcodes third-party credentials. */
+export function webrtcConfigEndpoint(): string {
+  return api('/api/webrtc-config');
+}
+
 const SEAT_KEY = "shard.seat";
 
 /**

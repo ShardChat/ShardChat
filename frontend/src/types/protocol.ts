@@ -176,6 +176,21 @@ export interface CallInvitePayload {
   kind: "audio" | "video";
 }
 
+/** P2P transport: the caller's SDP offer, relayed blind over the room socket. */
+export interface CallOfferPayload {
+  sdp: string;
+}
+
+/** P2P transport: the callee's SDP answer, relayed blind over the room socket. */
+export interface CallAnswerPayload {
+  sdp: string;
+}
+
+/** P2P transport: one trickled ICE candidate (null = end-of-candidates). */
+export interface CallIcePayload {
+  candidate: RTCIceCandidateInit | null;
+}
+
 /** POST /api/rooms response from the Go relay. */
 export interface CreateRoomResponse {
   roomId: string;
