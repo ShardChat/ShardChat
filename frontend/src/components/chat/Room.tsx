@@ -69,11 +69,12 @@ export const Room = forwardRef<RoomHandle, RoomProps>(function Room(
 ) {
   const s = useChatSession(roomId);
   const call = useWebRTCCall({
-    // Gate on verified: a dead /room/:id link must never spin up TURN fetches,
-    // ICE gathering or media devices before the room is confirmed to exist.
+    // Gate on verified: a dead /room/:id link must never spin up ICE
+    // gathering or media devices before the room is confirmed to exist.
     enabled: s.verified && s.phase !== "gone",
     dead: s.phase === "burned" || s.phase === "gone",
     expiresAt: s.expiresAt,
+    roomId,
     send: s.sendSignal,
     on: s.onSignal,
   });

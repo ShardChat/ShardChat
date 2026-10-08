@@ -27,7 +27,6 @@ import (
 
 	"shard-backend/internal/httpx"
 	"shard-backend/internal/room"
-	"shard-backend/internal/turn"
 	"shard-backend/internal/ws"
 )
 
@@ -212,15 +211,6 @@ func main() {
 			"peerCount": rm.ClientCount(),
 			"expiresAt": rm.ExpiresAt().UTC().Format(time.RFC3339),
 		})
-	})
-
-	// TURN: short-lived ICE servers. The API key never leaves Go.
-	mux.HandleFunc("GET /api/turn-credentials", func(w http.ResponseWriter, r *http.Request) {
-		body, status := turn.CredentialsJSON()
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(status)
-		_, _ = w.Write(body)
 	})
 
 	// Health: anonymous operational status only.

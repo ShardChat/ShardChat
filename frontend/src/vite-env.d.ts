@@ -11,8 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE?: string;
   /** Origin of the Go relay's WebSocket endpoint, e.g. wss://api.example.com */
   readonly VITE_WS_URL?: string;
-  /** STUN server used when the relay serves no TURN credentials. */
-  readonly VITE_STUN_URL?: string;
+  /** Origin of the shard-media SFU node (call signaling + media), e.g. wss://shard-media.onrender.com */
+  readonly VITE_MEDIA_URL?: string;
 }
 
 interface ImportMeta {

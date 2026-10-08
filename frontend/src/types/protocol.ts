@@ -176,26 +176,6 @@ export interface CallInvitePayload {
   kind: "audio" | "video";
 }
 
-/** SDP offer/answer for one call, relayed opaquely . */
-export interface CallSignalPayload {
-  sdp: string;
-}
-
-/** One trickled ICE candidate. `null` is the end-of-candidates marker. */
-export interface CallIcePayload {
-  candidate: RTCIceCandidateInit | null;
-}
-
-export interface IceServer {
-  urls: string | string[];
-  username?: string;
-  credential?: string;
-}
-
-export interface TurnCredentialsResponse {
-  iceServers: IceServer[];
-}
-
 /** POST /api/rooms response from the Go relay. */
 export interface CreateRoomResponse {
   roomId: string;

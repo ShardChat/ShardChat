@@ -1,0 +1,38 @@
+# shard-media — Render blueprint for the SFU media node.
+#
+# Fully separate microservice: own module, own image, own lifecycle. Deploy
+# with rootDir `shard-media` so only this directory builds. Like the relay,
+# the SFU is in-memory by design — a single instance, never autoscaling:
+# rooms live in this process's RAM.
+#
+# Media transport: Render's free tier proxies TCP only (80/443) and blocks
+# arbitrary UDP, so the server enables ICE-TCP (`SetICETCPMux` + TCP network
+# types). HTTP signaling owns $PORT; set SHARD_TCP_PORT to a Render TCP port
+# (or host mapping) for the media path. Without it the engine is UDP-only,
+# which still works wherever UDP egress is permitted.
+services:
+  - type: web
+    name: shard-media
+    runtime: docker
+    dockerfilePath: shard-media/Dockerfile
+    dockerContext: shard-media
+    plan: free
+    region: oregon
+    healthCheckPath: /healthz
+    # Render sends SIGTERM before restart/redeploy; the server drops every
+    # PeerConnection during the 15s graceful-drain window.
+    autoDeploy: true
+    envVars:
+      # Render injects PORT and routes its edge to it; the server serves
+      # HTTP signaling (/healthz, /ws) on it.
+      - key: PORT
+        sync: false
+      # Set to a Render TCP port (dashboard: "Add TCP port") or a host
+      # port mapping to enable ICE-TCP for the media path. Unset = UDP-only.
+      - key: SHARD_TCP_PORT
+        sync: false
+      # CSWSH guard: comma-separated list of allowed WS origins (your
+      # Vercel/Render frontends), e.g. "https://shardchat.vercel.app".
+      # Unset = accept any origin (dev only — set this in production).
+      - key: ALLOWED_ORIGINS
+        sync: false

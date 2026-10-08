@@ -11,11 +11,9 @@ services:
       # Strict allow-list of browser origins (CSWSH / CORS, comma-separated).
       # Unset → dev mode: loopback origins only, with a startup warning.
       ALLOWED_ORIGINS: "http://localhost:5173"
-      # Optional Metered TURN broker; unset → STUN-only ICE fallback
-      # (no third-party TURN, no Google STUN). Override the STUN endpoint
-      # with SHARD_STUN_URL (default: stun:stun.cloudflare.com:3478).
-      # METERED_DOMAIN: "your.subdomain.metered.ca"
-      # METERED_API_KEY: "your-api-key"
+      # Calls media flows through the standalone shard-media SFU (see
+      # shard-media/). The relay stays signaling-only: no TURN broker, no
+      # media termination.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]

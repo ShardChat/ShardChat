@@ -90,6 +90,18 @@ export function wsEndpoint(roomId: string): string {
   return `${WS_BASE}/ws/${encodeURIComponent(roomId)}?seat=${seatToken()}`;
 }
 
+/**
+ * Media signaling socket on the standalone `shard-media` SFU node.
+ * Unset VITE_MEDIA_URL falls back to the page's own origin with a scheme
+ * derived from the current protocol, so an https page always opens wss:.
+ */
+export function mediaWsEndpoint(roomId: string): string {
+  const base = import.meta.env.VITE_MEDIA_URL
+    ? import.meta.env.VITE_MEDIA_URL.replace(/\/+$/, '')
+    : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+  return `${base}/ws/${encodeURIComponent(roomId)}`;
+}
+
 const SEAT_KEY = "shard.seat";
 
 /**

@@ -1,16 +1,13 @@
-// SHARD — P2P audio/video on a native RTCPeerConnection. Signaling rides the
-// existing room WebSocket (offer / answer / ICE), ICE uses Metered TURN from
-// the Go API, and no third-party broker ever sees the session.
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { api } from "../lib/endpoints";
+// SHARD — audio/video calls through the standalone `shard-media` SFU node.
+// Ringing (invite / reject / hangup) rides the room relay socket; the media
+// plane — SDP signaling and the tracks themselves — goes over a dedicated
+// socket to the media node (`mediaWsEndpoint`). The SFU never decodes media:
+// it forwards RTP between the two peers verbatim.
+import { useCallback, useEffect, useRef, useState } from "react";
+import { mediaWsEndpoint } from "../lib/endpoints";
 import type {
-  CallIcePayload,
   CallInvitePayload,
-  CallSignalPayload,
-  IceServer,
-  TurnCredentialsResponse,
   WSPacket,
-  WSPacketType,
 } from "../types/protocol";
 
 export type CallKind = "audio" | "video";
@@ -21,6 +18,8 @@ interface UseWebRTCCallOpts {
   enabled: boolean;
   dead: boolean;
   expiresAt: number | null;
+  /** Room id, used to address the media node's signaling socket. */
+  roomId: string;
   send: (pkt: WSPacket) => boolean;
   on: (handler: (pkt: WSPacket) => void) => () => void;
 }
@@ -84,22 +83,20 @@ function stopStream(stream: MediaStream | null | undefined) {
   }
 }
 
-async function fetchIceServers(): Promise<IceServer[]> {
-  try {
-    const res = await fetch(api("/api/turn-credentials"));
-    if (!res.ok) throw new Error("turn");
-    const data = (await res.json()) as TurnCredentialsResponse;
-    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-      return data.iceServers;
-    }
-  } catch {
-    /* fall through */
-  }
-  // No third-party TURN credentials and no Google STUN: STUN-only
-  // keeps ICE peer-to-peer; operators can point VITE_STUN_URL at a
-  // self-hosted STUN, or configure METERED_* server-side for a TURN relay.
-  console.warn("[shard] TURN credentials unavailable — falling back to STUN-only ICE");
-  return [{ urls: import.meta.env.VITE_STUN_URL ?? "stun:stun.cloudflare.com:3478" }];
+/** ICE for calls: a single neutral STUN endpoint. No TURN broker, no
+ *  third-party credentials service — the SFU is reachable over TCP, and
+ *  direct peer paths ride STUN only. */
+const CALL_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
+
+/** Wire format of the shard-media signaling socket (sfu.SignalMsg): a thin
+ *  envelope of offers / answers / trickled ICE candidates, both directions. */
+type MediaSignal =
+  | { type: "offer" | "answer"; sdp: { type: string; sdp: string } | null }
+  | { type: "candidate"; candidate: RTCIceCandidateInit | null };
+
+/** Wraps an SDP description into the SFU's offer/answer envelope. */
+function mediaSdp(type: "offer" | "answer", sdp: string): MediaSignal {
+  return { type, sdp: { type, sdp } };
 }
 
 /** One reusable "black screen" canvas keeps the video m-line alive without
@@ -172,6 +169,23 @@ function deviceLabel(kind: string, d: MediaDeviceInfo, i: number): string {
   return `Speaker ${i + 1}`;
 }
 
+/**
+ * Builds the session's RTCPeerConnection. SDP/ICE signaling funnels to the
+ * media node's socket via `sendSignal`; the SFU answers and later drives
+ * renegotiation offers whenever a peer publishes a new track.
+ */
+function createPeerConnection(sendSignal: (msg: MediaSignal) => void): RTCPeerConnection {
+  const pc = new RTCPeerConnection({
+    iceServers: CALL_ICE_SERVERS,
+    bundlePolicy: "max-bundle",
+  });
+  pc.onicecandidate = (ev) => {
+    // ev.candidate === null is the explicit end-of-candidates marker.
+    sendSignal({ type: "candidate", candidate: ev.candidate ? ev.candidate.toJSON() : null });
+  };
+  return pc;
+}
+
 function senderFor(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpSender | undefined {
   const byTrack = pc.getSenders().find((s) => s.track?.kind === kind);
   if (byTrack) return byTrack;
@@ -186,24 +200,6 @@ function senderFor(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpSender
 /** Remote ICE candidates that arrived before our remote description existed.
  *  addIceCandidate() rejects until then, so early ones wait here. */
 const pendingIce = new WeakMap<RTCPeerConnection, RTCIceCandidateInit[]>();
-
-/**
- * Builds the session's RTCPeerConnection and wires signaling to our own room
- * socket . Nothing leaves the two-peer channel any more: no PeerJS cloud,
- * no SDP on a third party's server.
- */
-function createPeerConnection(
-  send: (pkt: { type: WSPacketType; payload?: unknown }) => void,
-  iceServers: RTCIceServer[],
-): RTCPeerConnection {
-  const pc = new RTCPeerConnection({ iceServers, bundlePolicy: "max-bundle" });
-  pc.onicecandidate = (ev) => {
-    // ev.candidate === null is the explicit end-of-candidates marker; the peer
-    // needs it to finish gathering on browsers that trickle.
-    send({ type: "CALL_ICE", payload: { candidate: ev.candidate ? ev.candidate.toJSON() : null } });
-  };
-  return pc;
-}
 
 /** Applies a trickled candidate, queueing it if the remote description has
  *  not landed yet (candidates routinely arrive first). */
@@ -229,20 +225,6 @@ async function flushIce(pc: RTCPeerConnection) {
     } catch {
       /* see applyIce */
     }
-  }
-}
-
-/** Resolves the caller's offer, tolerating a hair of scheduling delay. */
-async function waitForPendingOffer(
-  ref: RefObject<CallSignalPayload | null>,
-  timeoutMs = 2000,
-): Promise<CallSignalPayload | null> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const offer = ref.current;
-    if (offer) return offer;
-    if (Date.now() >= deadline) return null;
-    await new Promise((r) => window.setTimeout(r, 40));
   }
 }
 
@@ -317,13 +299,14 @@ function canFlipCamera(track: MediaStreamTrack | null | undefined, deviceCount: 
   return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 }
 
-/** Calls negotiate a native RTCPeerConnection and the
- *  offer/answer/ICE travel over the session's own blind relay, so the public
- *  0.peerjs.com signaling cloud never sees a peer id, an SDP or a local IP. */
+/** Calls negotiate against the shard-media SFU: ringing travels the room
+ *  relay, SDP/ICE/tracks travel the media node's own socket. The SFU sees
+ *  the media; the relay sees only that a call exists. */
 export function useWebRTCCall({
   enabled,
   dead,
   expiresAt,
+  roomId,
   send,
   on,
 }: UseWebRTCCallOpts): UseWebRTCCallResult {
@@ -365,17 +348,17 @@ export function useWebRTCCall({
   const restoringRef = useRef(false);
   /** The live call's peer connection: we own it, no broker. */
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  /** Offer received from the caller while the incoming UI waits for a tap. */
-  const pendingOfferRef = useRef<CallSignalPayload | null>(null);
-  /** Candidates that arrived before we had a connection to attach them to
-   *  (the callee is still ringing). Replayed onto the new connection. */
-  const earlyIceRef = useRef<RTCIceCandidateInit[]>([]);
   /** True for the side that placed the call. Only that side renegotiates, so
    *  the two peers can never glare (simultaneous offers) — with exactly two
    *  participants that is as much as perfect negotiation needs. */
   const isCallerRef = useRef(false);
-  /** ICE servers resolved once per session and shared by both roles. */
-  const iceServersRef = useRef<RTCIceServer[] | null>(null);
+  /** The media node's signaling socket for this room (one per call). */
+  const mediaWsRef = useRef<WebSocket | null>(null);
+  /** De-duplicates concurrent openMediaSocket() calls. */
+  const mediaConnectRef = useRef<Promise<WebSocket> | null>(null);
+  /** Serializes SDP processing of media-socket messages (answer vs. offer
+   *  racing each other into the same PeerConnection). */
+  const mediaMsgQueue = useRef<Promise<void>>(Promise.resolve());
   const localRef = useRef<MediaStream | null>(null);
   /** Live remote media; re-exposed so mute/unmute edges can refresh it. */
   const remoteRef = useRef<MediaStream | null>(null);
@@ -403,32 +386,32 @@ export function useWebRTCCall({
   cameraOffRef.current = cameraOff;
   sharingRef.current = sharing;
 
-  /** Resolves ICE servers once per session (Go /api/turn-credentials, or the
-   *  STUN-only fallback). Cached so caller and callee reuse the same list. */
-  const resolveIceServers = useCallback(async (): Promise<RTCIceServer[]> => {
-    if (iceServersRef.current) return iceServersRef.current;
-    const servers: RTCIceServer[] = [];
-    try {
-      servers.push(...(await fetchIceServers()));
-    } catch {
-      /* fall through to the STUN-only list */
-    }
-    iceServersRef.current = servers;
-    return servers;
-  }, []);
-
   const teardownMedia = useCallback(() => {
     hangingUpRef.current = true;
     micTrackRef.current = null;
     restoringRef.current = false;
+    // Media node socket: drop handlers first so its close event cannot
+    // re-trigger a hangup, then close it. Every track and the PC follow.
+    const ws = mediaWsRef.current;
+    mediaWsRef.current = null;
+    mediaConnectRef.current = null;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
+    }
     stopStream(localRef.current);
     stopStream(screenRef.current);
     stopStream(remoteRef.current);
     localRef.current = null;
     screenRef.current = null;
     remoteRef.current = null;
-    pendingOfferRef.current = null;
-    earlyIceRef.current = [];
     isCallerRef.current = false;
     setLocalStream(null);
     setRemoteStream(null);
@@ -467,6 +450,115 @@ export function useWebRTCCall({
 
   const hangup = useCallback(() => hangupInternal(true), [hangupInternal]);
 
+  /** Signals arriving on the media node's socket: our answer (or the SFU's
+   *  renegotiation offers) and its trickled ICE candidates. */
+  const handleMediaMessage = useCallback(async (ws: WebSocket, raw: string) => {
+    let msg: MediaSignal;
+    try {
+      msg = JSON.parse(raw) as MediaSignal;
+    } catch {
+      return; // not ours to parse
+    }
+    const pc = pcRef.current;
+    if (msg.type === "answer") {
+      if (!pc || !msg.sdp) return;
+      try {
+        await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp.sdp });
+        await flushIce(pc);
+      } catch (err) {
+        // a stale answer (call already torn down) is not fatal
+        console.warn("[shard] media answer rejected", err);
+      }
+      return;
+    }
+    if (msg.type === "offer") {
+      // The SFU renegotiates when the other peer publishes a track we have
+      // not seen yet. If we are mid-offer ourselves, the server wins — roll
+      // ours back; the kick loop in the SFU re-offers anything we lost.
+      if (!pc || !msg.sdp) return;
+      try {
+        if (pc.signalingState === "have-local-offer") {
+          await pc.setLocalDescription({ type: "rollback" });
+        }
+        await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp.sdp });
+        await flushIce(pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(mediaSdp("answer", pc.localDescription?.sdp ?? answer.sdp ?? "")));
+        }
+      } catch (err) {
+        // Without an answer the SFU drops this renegotiation after its
+        // timeout; the tracks we lost re-arrive on the next offer.
+        console.warn("[shard] SFU renegotiation offer not answered", err);
+      }
+      return;
+    }
+    if (msg.type === "candidate" && msg.candidate) {
+      if (!pc) return;
+      void applyIce(pc, msg.candidate);
+    }
+  }, []);
+
+  /**
+   * Opens (or returns the already-open) media node socket for this room.
+   * One socket per call; closed by teardownMedia. If it drops while a call
+   * is live, the media plane is dead — notify the peer and hang up.
+   */
+  const openMediaSocket = useCallback((): Promise<WebSocket> => {
+    const existing = mediaWsRef.current;
+    if (existing && existing.readyState === WebSocket.OPEN) return Promise.resolve(existing);
+    if (mediaConnectRef.current) return mediaConnectRef.current;
+    mediaConnectRef.current = new Promise<WebSocket>((resolve, reject) => {
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(mediaWsEndpoint(roomId));
+      } catch (err) {
+        mediaConnectRef.current = null;
+        reject(err instanceof Error ? err : new Error("media socket"));
+        return;
+      }
+      ws.onopen = () => {
+        mediaConnectRef.current = null;
+        mediaWsRef.current = ws;
+        resolve(ws);
+      };
+      ws.onerror = () => {
+        mediaConnectRef.current = null;
+        reject(new Error("media socket failed"));
+      };
+      ws.onclose = () => {
+        if (mediaWsRef.current === ws) mediaWsRef.current = null;
+        mediaConnectRef.current = null;
+        // Dead media socket is a dead call — unless teardown closed it.
+        if (
+          !hangingUpRef.current &&
+          (phaseRef.current === "active" || phaseRef.current === "calling")
+        ) {
+          sendRef.current({ type: "CALL_HANGUP" });
+          hangupInternal(false);
+        }
+      };
+      ws.onmessage = (ev) => {
+        // Serialize: an SFU answer and a renegotiation offer can arrive back
+        // to back; applying the answer MUST complete before the offer is
+        // processed, or its signaling-state check races and rolls back the
+        // wrong direction.
+        mediaMsgQueue.current = mediaMsgQueue.current
+          .then(() => handleMediaMessage(ws, String(ev.data)))
+          .catch(() => {});
+      };
+    });
+    return mediaConnectRef.current;
+  }, [handleMediaMessage, hangupInternal, roomId]);
+
+  /** Sends one signaling envelope to the media node; silently ignored when
+   *  the socket is gone (teardown owns cleanup in that case). */
+  const sendMediaSignal = useCallback((msg: MediaSignal) => {
+    const ws = mediaWsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }, []);
+
   const adoptRemote = useCallback((stream: MediaStream) => {
     remoteRef.current = stream;
     setRemoteStream(new MediaStream(stream.getTracks()));
@@ -485,28 +577,18 @@ export function useWebRTCCall({
     async (stream: MediaStream): Promise<RTCPeerConnection> => {
       let pc = pcRef.current;
       if (!pc || pc.signalingState === "closed") {
-        pc = createPeerConnection(
-          (pkt) => sendRef.current(pkt),
-          await resolveIceServers(),
-        );
+        pc = createPeerConnection(sendMediaSignal);
         pcRef.current = pc;
-        // Replay whatever trickled in before this connection existed.
-        if (earlyIceRef.current.length) {
-          pendingIce.set(pc, [...earlyIceRef.current]);
-          earlyIceRef.current = [];
-        }
         pc.onnegotiationneeded = () => {
           // Renegotiation is single-writer: only the caller offers, which keeps
-          // which keeps the state machine single-writer.
+          // the state machine single-writer. (The SFU offers separately when
+          // the other peer publishes; those offers are answered above.)
           if (!isCallerRef.current || hangingUpRef.current) return;
           void (async () => {
             try {
               const offer = await pc!.createOffer();
               await pc!.setLocalDescription(offer);
-              sendRef.current({
-                type: "CALL_OFFER",
-                payload: { sdp: pc!.localDescription?.sdp ?? offer.sdp ?? "" } satisfies CallSignalPayload,
-              });
+              sendMediaSignal(mediaSdp("offer", pc!.localDescription?.sdp ?? offer.sdp ?? ""));
             } catch {
               /* a failed renegotiation leaves the current media flowing */
             }
@@ -543,7 +625,7 @@ export function useWebRTCCall({
       }
       return pc;
     },
-    [adoptRemote, hangupInternal, resolveIceServers],
+    [adoptRemote, hangupInternal, sendMediaSignal],
   );
 
   const replaceTrackKind = useCallback(async (kind: "audio" | "video", track: MediaStreamTrack | null) => {
@@ -583,19 +665,20 @@ export function useWebRTCCall({
         void refreshDevicesRef.current();
         sendRef.current({ type: "CALL_INVITE", payload: { kind: nextKind } satisfies CallInvitePayload });
         const pc = await attachCall(stream);
+        // Media plane: open the SFU socket and offer our tracks. The SFU
+        // answers with everything already published in the room.
+        const ws = await openMediaSocket();
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         // setLocalDescription gives us the SDP with the gathered candidates
         // already appended; onicecandidate trickles any late ones.
-        sendRef.current({
-          type: "CALL_OFFER",
-          payload: { sdp: pc.localDescription?.sdp ?? offer.sdp ?? "" } satisfies CallSignalPayload,
-        });
+        if (ws.readyState !== WebSocket.OPEN) throw new Error("media socket closed");
+        ws.send(JSON.stringify(mediaSdp("offer", pc.localDescription?.sdp ?? offer.sdp ?? "")));
       } catch {
         hangupInternal(true);
       }
     },
-    [attachCall, dead, enabled, hangupInternal, remotePeerReady],
+    [attachCall, dead, enabled, hangupInternal, openMediaSocket, remotePeerReady],
   );
 
   const accept = useCallback(() => {
@@ -611,19 +694,15 @@ export function useWebRTCCall({
 
     void (async () => {
       try {
-        // INVITE and OFFER travel the same ordered socket, but the offer can
-        // still be a tick behind the ring UI — wait briefly instead of
-        // turning the tap into a silent no-op.
-        const offer = await waitForPendingOffer(pendingOfferRef);
-        if (!offer || hangingUpRef.current) {
-          hangupInternal(true);
-          return;
-        }
+        // The INVITE rang on the relay; media negotiation now happens with
+        // the SFU: open its socket, offer our tracks, receive the caller's
+        // tracks back inside the answer (plus any renegotiation offers for
+        // tracks published after we joined).
         const stream = await getLocalMedia(nextKind, facingRef.current, {
           audioId: micIdRef.current,
           videoId: cameraIdRef.current,
         });
-        if (hangingUpRef.current || pendingOfferRef.current !== offer) {
+        if (hangingUpRef.current) {
           stopStream(stream);
           return;
         }
@@ -632,15 +711,11 @@ export function useWebRTCCall({
         micTrackRef.current = stream.getAudioTracks()[0] ?? null;
         setLocalStream(stream);
         const pc = await attachCall(stream);
-        await pc.setRemoteDescription({ type: "offer", sdp: offer.sdp });
-        await flushIce(pc);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendRef.current({
-          type: "CALL_ANSWER",
-          payload: { sdp: pc.localDescription?.sdp ?? answer.sdp ?? "" } satisfies CallSignalPayload,
-        });
-        pendingOfferRef.current = null;
+        const ws = await openMediaSocket();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        if (ws.readyState !== WebSocket.OPEN) throw new Error("media socket closed");
+        ws.send(JSON.stringify(mediaSdp("offer", pc.localDescription?.sdp ?? offer.sdp ?? "")));
         setPhase("active");
         phaseRef.current = "active";
         const hasVideo = stream.getVideoTracks().some((t) => {
@@ -665,7 +740,6 @@ export function useWebRTCCall({
 
   const reject = useCallback(() => {
     sendRef.current({ type: "CALL_REJECT" });
-    pendingOfferRef.current = null;
     teardownMedia();
     setPhase("idle");
   }, [teardownMedia]);
@@ -1173,26 +1247,20 @@ export function useWebRTCCall({
     return () => md.removeEventListener("devicechange", onChange);
   }, [refreshDevices]);
 
-  // Session lifecycle hook. There is no broker any more, so this only
-  // arms the ICE server list and tears the call down when the room dies.
+  // Session lifecycle hook: tears the call (tracks, PC, media socket) down
+  // when the room dies or the hook unmounts.
   useEffect(() => {
     if (!enabled || dead) return;
-    let cancelled = false;
-    void (async () => {
-      await resolveIceServers();
-      if (cancelled) return;
-    })();
     return () => {
-      cancelled = true;
       hangupInternal(false);
       setRemotePeerReady(false);
     };
-  // resolveIceServers / hangupInternal are stable enough; recreate only on
-  // room life.
+  // hangupInternal is stable enough; recreate only on room life.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, dead]);
 
-  // WS signaling: presence, invite, offer/answer, ICE, reject, hangup.
+  // Relay WS signaling: presence, ringing, reject, hangup, burn. SDP and ICE
+  // do NOT travel here any more — the media node's socket owns them.
   useEffect(() => {
     if (!enabled || dead) return;
     const off = on((pkt) => {
@@ -1223,61 +1291,6 @@ export function useWebRTCCall({
             setPhase("incoming");
             setMinimized(false);
           }
-          break;
-        }
-        case "CALL_OFFER": {
-          const sdp = (pkt.payload as CallSignalPayload | undefined)?.sdp;
-          if (!sdp) return;
-          // renegotiation (screen share on an audio-only call, a new track):
-          // the caller re-offers mid-call and we answer straight away.
-          if (phaseRef.current === "active" || phaseRef.current === "calling") {
-            const pc = pcRef.current;
-            if (!pc || isCallerRef.current) return;
-            void (async () => {
-              try {
-                await pc.setRemoteDescription({ type: "offer", sdp });
-                await flushIce(pc);
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                sendRef.current({
-                  type: "CALL_ANSWER",
-                  payload: { sdp: pc.localDescription?.sdp ?? answer.sdp ?? "" } satisfies CallSignalPayload,
-                });
-              } catch {
-                /* keep the media that is already flowing */
-              }
-            })();
-            return;
-          }
-          // first offer: INVITE always precedes it on the same socket, so the
-          // incoming UI is up — hold the offer until Accept.
-          pendingOfferRef.current = { sdp };
-          setPhase("incoming");
-          break;
-        }
-        case "CALL_ANSWER": {
-          const sdp = (pkt.payload as CallSignalPayload | undefined)?.sdp;
-          const pc = pcRef.current;
-          if (!sdp || !pc) return;
-          void pc
-            .setRemoteDescription({ type: "answer", sdp })
-            .then(() => flushIce(pc))
-            .catch(() => {
-              /* a stale answer (call already torn down) is not fatal */
-            });
-          break;
-        }
-        case "CALL_ICE": {
-          const candidate = (pkt.payload as CallIcePayload | undefined)?.candidate ?? null;
-          if (!candidate) return;
-          const pc = pcRef.current;
-          // No connection yet (still ringing): hold the candidates so the
-          // connection we build on Accept inherits them.
-          if (!pc) {
-            earlyIceRef.current = [...earlyIceRef.current, candidate];
-            return;
-          }
-          void applyIce(pc, candidate);
           break;
         }
         case "CALL_REJECT":

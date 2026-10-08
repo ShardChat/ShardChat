@@ -53,9 +53,3 @@ services:
       # that ejected the survivor from a live session. Set 0 to burn instantly.
       - key: SHARD_PEER_GRACE_SECONDS
         value: "45"
-      # Optional TURN broker. Unset -> STUN-only ICE (direct P2P reachable
-      # peers only). The API key is read in Go and never sent to the browser.
-      - key: METERED_DOMAIN
-        sync: false
-      - key: METERED_API_KEY
-        sync: false

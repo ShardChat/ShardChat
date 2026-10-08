@@ -151,18 +151,17 @@ The blocklist and signatures live in `frontend/src/lib/fileSecurity.ts` and are 
 | Relay            | Go 1.26, `gorilla/websocket` (the only backend dependency)         |
 | Client           | React 18, TypeScript 5.9, Vite 7, Tailwind CSS 4                   |
 | Cryptography     | Native Web Crypto API + `@noble/post-quantum` (ML-KEM-768; the only third-party crypto) |
-| Calls            | Native `RTCPeerConnection`, signaling relayed in-session            |
-|                  | (no third-party broker); TURN credentials brokered by Go           |
+| Calls            | Native `RTCPeerConnection`, media via the standalone `shard-media`  |
+|                  | SFU node; call signaling rides the session relay                    |
 | Extras           | JSZip (archive inspection), react-markdown, qrcode.react            |
 | Tests            | In-browser crypto self-test (`frontend/src/crypto/selftest.ts`)      |
 
 ```text
 .
 ├── backend/
-│   ├── cmd/server/main.go        # relay entrypoint: REST, WS, TURN, static hosting, signal handling
+│   ├── cmd/server/main.go        # relay entrypoint: REST, WS, static hosting, signal handling
 │   ├── internal/httpx/           # security headers, CORS origin checks, panic recovery
 │   ├── internal/room/            # room manager: RAM store, TTL timers, burn path, connection budget
-│   ├── internal/turn/            # Metered TURN broker + local-dev fallback
 │   ├── internal/ws/              # WebSocket handler, packet protocol, 2-peer gate
 ├── frontend/
 │   ├── .env.example              # documented VITE_* build-time overrides
@@ -193,9 +192,6 @@ All configuration is environment-based. Defaults are tuned for local development
 | `SHARD_ADDR`              | `:8080`                 | Relay listen address, used when `PORT` is absent               |
 | `ALLOWED_ORIGINS`          | unset                   | **Strict** comma-separated allowlist of browser origins (CORS + WebSocket Origin). Unset → dev mode: loopback origins only, with a startup warning |
 | `SHARD_STATIC`            | `../frontend/dist`      | SPA assets served by the relay in single-service deployments   |
-| `SHARD_STUN_URL`         | `stun:stun.cloudflare.com:3478` | STUN endpoint used in the no-TURN fallback (comma-separated URLs allowed) |
-| `METERED_DOMAIN`           | unset                   | Metered.ca TURN API host; unset → **STUN-only** ICE fallback (no third-party TURN) |
-| `METERED_API_KEY`          | unset                   | Metered API key; stays server-side, never sent to clients      |
 
 Frontend build-time overrides (see `frontend/.env.example`):
 
@@ -203,11 +199,11 @@ Frontend build-time overrides (see `frontend/.env.example`):
 | ----------------- | ------------ | ----------------------------------------------------------------------------- |
 | `VITE_API_BASE`   | unset        | Relay origin for REST. Unset → same-origin relative requests (single-service default) |
 | `VITE_WS_URL`     | unset        | Relay origin for the WebSocket. Unset → derived from `location` (`wss:` on https). Scheme is validated at load |
-| `VITE_STUN_URL`   | `stun:stun.cloudflare.com:3478` | Browser-side STUN fallback when the relay serves no TURN credentials |
+| `VITE_MEDIA_URL`  | unset        | Origin of the `shard-media` SFU for call signaling+media. Unset → derived from `location` (`wss:` on https) |
 
 `VITE_API_BASE` / `VITE_WS_URL` are needed **only** when the static bundle and the relay are served from different hosts (see the split topology below). Whichever frontend origin you deploy to must also appear in the relay's `ALLOWED_ORIGINS`, otherwise the CORS middleware refuses `POST /api/rooms` and the WebSocket origin check answers 403.
 
-TURN credentials are issued as short-lived (24 h) ICE configurations from `GET /api/turn-credentials`. Without Metered configuration the relay hands out a neutral STUN endpoint only — no open TURN relays, no Google infrastructure (privacy: calls stay peer-to-peer whenever the network allows).
+Calls connect to the standalone `shard-media` SFU (see `shard-media/`): the browser opens `VITE_MEDIA_URL` (`/ws/:roomId`) for media signaling and sends its tracks straight to the media node. ICE is a plain STUN setup — no TURN broker, no third-party credentials service.
 
 ## 9. Local Development & Docker Deployment
 
@@ -322,7 +318,7 @@ import("/src/crypto/selftest.ts").then((m) => m.runCryptoSelfTest());
 - Man-in-the-middle on first contact. The relay could swap public keys. The 4-emoji fingerprint exists precisely for this: verify it through a second channel before discussing anything sensitive.
 - Metadata correlation. The relay necessarily knows that two anonymous connections met and how much data they exchanged.
 - Quantum authentication is not identity. The hybrid KEM makes the channel confidential against quantum adversaries, but confirming WHO holds the other end still rests on the manual 4-emoji fingerprint comparison.
-- WebRTC IP exposure. Peer-to-peer media inherently reveals IP addresses to the peer and to the TURN service.
+- WebRTC IP exposure. Call media transits the `shard-media` SFU node, which learns both peers' IP addresses during ICE.
 - Infrastructure logs outside SHARD. The relay writes no IP addresses, but a hosting provider, CDN, or reverse proxy in front of it records connection metadata under its own policy. Read the deployment chain's terms if that boundary matters to you.
 
 There is no message recovery. Deleted means deleted; expired means gone. This is a property, not a defect.
