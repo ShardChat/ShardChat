@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -tags netgo -ldflags '-s -w' -o /out/shard
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates && \
-    adduser -D -H -s /sbin/nologin -u 65534 media
+    adduser -D -H -s /sbin/nologin -u 10001 media
 
 COPY --from=build /out/shard-media /usr/local/bin/shard-media
 
